@@ -43,7 +43,7 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak check main.lua dist/x.tic   check exactly these files: full report
   ticpak minify enemies.lua       the minifier on its own (ticpak minify --help)
 
-full documentation: README.md
+full documentation: https://github.com/dtempx/ticpak#readme
 """
 
 COMMANDS = ("build", "check")       # `minify` is dispatched before argparse
@@ -145,7 +145,8 @@ def parse_args(argv):
                     const=minifier.ALL_OPTIONS, default=frozenset(),
                     help="minify the bundle: --minify alone applies every"
                          " option; --minify=OPTION,... only those ("
-                         + ", ".join(minifier.OPTIONS) + "; see README.md)."
+                         + ", ".join(minifier.OPTIONS) + "; see the documentation"
+                         " below)."
                          " Without it the bundle is not minified")
     ap.add_argument("--verbose", action="store_true",
                     help="show progress and the check's detail (with `check`:"

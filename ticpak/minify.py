@@ -2904,7 +2904,7 @@ USAGE = """usage: ticpak minify [options] FILE.lua    (writes to stdout)
   --width=N           line width of the layout (default 120)
   --inline=all        inline every constant, ignoring the size check
 
-full documentation: docs/minify.md"""
+full documentation: https://github.com/dtempx/ticpak/blob/main/docs/minify.md"""
 
 
 def main(argv=None):
