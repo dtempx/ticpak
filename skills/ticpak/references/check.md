@@ -3,7 +3,7 @@
 No TIC-80 binary is needed. From the project folder:
 
 ```
-ticpak check -v                          # the built dist/<name>.tic, full report
+ticpak check --verbose                   # the built dist/<name>.tic, full report
 ticpak check main.lua dist/<name>.tic    # source header and package in one run
 ```
 

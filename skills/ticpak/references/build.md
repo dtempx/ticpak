@@ -47,7 +47,7 @@
    ```
 
    Exit status 1 means a limit or header violation, printed above the
-   summary. Explain it using [check.md](check.md). `-v` adds progress and the
+   summary. Explain it using [check.md](check.md). `--verbose` adds progress and the
    check's detail.
 4. **Give the user the path to `dist/<name>.tic`.** That is the file
    tic80.com takes. For a web or native build, load `dist/<name>.lua` in
@@ -63,14 +63,16 @@
 | boot output with `module 'x' not found`, then `FAILED to boot alone` | A module that only another module requires. Add `require "x"` to `main.lua`: ticpak inlines only the modules named there. |
 | boot output with `[string "..."]:N:` or `stack traceback` | A syntax or runtime error during boot. Decode `N` as below and fix the source. |
 | `TIC-80 reads a line starting -- < ...` | A module comment starts `-- <` in column 0. Reword or indent it, or build with at least `-m=comments`. |
+| `x.lua:N starts an asset section (-- <MAP>), but only main.lua's asset sections are packaged` | A module holds asset data, which would be cut off or silently stripped. Move the whole section into `main.lua`'s asset sections, merging with any existing section of the same name. |
 | `no asset chunks found` | `main.lua` has no `-- <TILES>`-style section. Save the cart once from TIC-80 Pro, or add the `PALETTE` section from [init.md](init.md). |
 | `entry stub requires no modules` | `main.lua` has no `require` lines. A single-file cart doesn't need ticpak. |
 | `no TIC-80 Pro binary found` | Set `$TIC80` to the binary, or put `tic80` on PATH. ticpak also checks `tools/tic80.exe` and `tools/tic80/build/bin/tic80` in the nearest folder above. Only Pro reads `.lua` carts, and it is a paid download from itch.io or a source build with `-DBUILD_PRO=On`. |
 | `-m` option list error naming a path | Write `-m=OPTION,...` with `=`, or put the cart path first. |
 
-If minification seems to change behaviour, rebuild without `-m`. If the
-unminified build works, report it as a ticpak bug, with the
-`dist/<name>.minify.txt` from the failing build.
+If minification seems to change behaviour, copy `dist/<name>.minify.txt`
+somewhere safe, then rebuild without `-m` (that build deletes the decode maps,
+which would no longer match). If the unminified build works, report it as a
+ticpak bug, with the copied `.minify.txt` from the failing build.
 
 ## Decoding an error from a packaged cart
 

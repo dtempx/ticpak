@@ -14,7 +14,7 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  `comments`, raw subset == its effective set
   CommandLine        --minify absent = none, bare = all, =a,b = those only;
                  presets and --no-minify rejected; a path after --minify hinted;
-                 -m, -o/--out, -f/--force, -v/--verbose; `rebuild`,
+                 -m, -o/--out, -f/--force, --verbose, -v/--version; `rebuild`,
                  `check -f`, --no-check and --output rejected
   Summary        the closing size summary's lines and arithmetic, on a .tic
                  built by hand (no TIC-80 run)
@@ -38,8 +38,11 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  byte for byte under every option set, used names pinned
   Bundle         the project bundled by bundle.bundle() for every set behaves
                  like the unminified bundle, keeps its assets and header
+  BundleAssets   every asset layout (and CRLF) survives bundle.bundle(); no
+                 sections, or a section in a module, stops the build
   Boot           (TICPAK_BOOT=1 only - runs TIC-80) each bundle boots headless
-                 and saves a .tic that passes check.py
+                 and saves a .tic that passes check.py and holds main.lua's
+                 assets byte for byte
 
 Behaviour and Bundle need lupa (pip install lupa); without it they skip.
 """
@@ -49,6 +52,7 @@ import functools
 import io
 import itertools
 import os
+import random
 import re
 import shutil
 import sys
@@ -59,8 +63,10 @@ import warnings
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)                    # the ticpak package, installed or not
+sys.path.insert(0, HERE)                    # make_samples, for its asset layouts
 from ticpak import minify as M  # noqa: E402
 from ticpak import bundle, check, cli, report, run  # noqa: E402
+import make_samples  # noqa: E402
 
 try:
     from lupa import lua53
@@ -146,6 +152,71 @@ def combos():
     return [(n, o) for n in SAMPLES for o in EFFECTIVE]
 
 
+PROJECT_MAIN = os.path.join(HERE, "project", "main.lua")
+# Every asset layout make_samples writes, plus bank 0's with CRLF line endings
+ASSET_PROJECTS = [(lay, "\n") for lay in make_samples.ASSET_LAYOUTS if lay != "none"] \
+    + [("bank0", "\r\n")]
+
+
+def read_text(path):
+    """A file in text mode, line endings normalised, as ticpak reads carts."""
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def asset_project(root, layout, newline="\n", seed=7):
+    """A copy of project/ whose main.lua carries make_samples' `layout` of
+    asset sections, written with `newline`; returns its main.lua's path."""
+    os.makedirs(root)
+    src = os.path.dirname(PROJECT_MAIN)
+    for f in os.listdir(src):
+        if f.endswith(".lua") and f != "main.lua":
+            shutil.copy(os.path.join(src, f), root)
+    text = read_text(PROJECT_MAIN)
+    code = text[:bundle.CHUNK_RE.search(text).start()]
+    main = os.path.join(root, "main.lua")
+    with open(main, "w", encoding="utf-8", newline="") as f:
+        f.write((code + make_samples.assets(layout, random.Random(seed)))
+                .replace("\n", newline))
+    return main
+
+
+# Text-cart section -> (.tic chunk, bytes per text line, nibbles swapped in
+# the hex); TIC-80's BinarySections table in src/studio/project.c.
+TEXT_TO_TIC = {
+    "TILES": ("TILES", 32, True), "SPRITES": ("SPRITES", 32, True),
+    "MAP": ("MAP", 240, True), "FLAGS": ("FLAGS", 256, True),
+    "WAVES": ("WAVEFORM", 16, True), "SFX": ("SAMPLES", 66, True),
+    "PATTERNS": ("PATTERNS", 192, True), "TRACKS": ("MUSIC", 51, True),
+    "SCREEN": ("SCREEN", 120, True), "PALETTE": ("PALETTE", 48, False),
+}
+
+
+def text_assets(chunks):
+    """{(.tic chunk name, bank): bytes} decoded from a text cart's asset
+    sections, trailing zeros trimmed as the .tic stores them."""
+    out = {}
+    for m in re.finditer(r"^-- <([A-Z]+)(\d?)>\n(.*?)^-- </\1\2>", chunks, re.S | re.M):
+        name, per, swap = TEXT_TO_TIC[m.group(1)]
+        buf = bytearray()
+        for row, hx in re.findall(r"^-- (\d+):([0-9a-fA-F]+)", m.group(3), re.M):
+            if swap:
+                hx = "".join(hx[i + 1] + hx[i] for i in range(0, len(hx), 2))
+            data, at = bytes.fromhex(hx), int(row) * per
+            buf.extend(bytes(max(0, at + len(data) - len(buf))))
+            buf[at:at + len(data)] = data
+        out[(name, int(m.group(2) or 0))] = bytes(buf).rstrip(b"\0")
+    return out
+
+
+def tic_assets(path):
+    """{(chunk name, bank): bytes} of a .tic's non-code chunks."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return {(n, b): data[o:o + s].rstrip(b"\0")
+            for n, b, s, o in check.parse_tic(data)[0] if n not in check.CODE_CHUNKS}
+
+
 class TestOptionParsing(unittest.TestCase):
     def test_empty_and_max(self):
         self.assertEqual(M.parse_options(""), frozenset())
@@ -185,7 +256,7 @@ class TestOptionParsing(unittest.TestCase):
 
 class TestCommandLine(unittest.TestCase):
     """ticpak's command line: --minify absent = none, bare = all, =a,b =
-    those only; -f/--force and -v/--verbose; `rebuild` gone."""
+    those only; -f/--force, --verbose and -v/--version; `rebuild` gone."""
 
     def parse(self, *argv):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -231,14 +302,23 @@ class TestCommandLine(unittest.TestCase):
         self.assertIsNone(self.parse("build")[1].out)
 
     def test_force_and_verbose(self):
-        _, args, _ = self.parse("build", "-f", "-v")
+        _, args, _ = self.parse("build", "-f", "--verbose")
         self.assertTrue(args.force and args.verbose)
         _, args, _ = self.parse("build", "--force", "--verbose")
         self.assertTrue(args.force and args.verbose)
         _, args, _ = self.parse("build")
         self.assertFalse(args.force or args.verbose)
-        _, args, _ = self.parse("check", "-v")
+        _, args, _ = self.parse("check", "--verbose")
         self.assertTrue(args.verbose)
+
+    def test_v_is_version(self):
+        for flag in ("-v", "--version"):
+            out = io.StringIO()
+            with self.subTest(flag=flag), contextlib.redirect_stdout(out), \
+                    self.assertRaises(SystemExit) as e:
+                self.parse("build", flag)
+            self.assertEqual(e.exception.code, 0)
+            self.assertIn("ticpak ", out.getvalue())
 
     def test_rebuild_and_check_force_rejected(self):
         for argv in (["check", "-f"], ["build", "--no-check"],
@@ -657,26 +737,104 @@ class TestBundle(unittest.TestCase):
                 self.assertEqual(run_lua(text), ref)
 
 
+class TestBundleAssets(unittest.TestCase):
+    """bundle.bundle()'s own cart split on every asset layout (TestBundle's
+    project has bank 0's only), and asset sections where they don't belong."""
+
+    SETS = (frozenset(), M.parse_options("comments"), M.ALL_OPTIONS)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="bundle-assets-")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def build(self, main, opts, out="out"):
+        t = bundle.Target(main, "assets", os.path.join(os.path.dirname(main), out))
+        with contextlib.redirect_stdout(io.StringIO()):
+            bundle.bundle(t, minify_options=opts)
+        return read_text(t.lua)
+
+    def test_every_layout_kept(self):
+        for layout, nl in ASSET_PROJECTS:
+            main = asset_project(os.path.join(self.tmp, f"{layout}{len(nl)}"), layout, nl)
+            chunks = parts(read_text(main))[2]
+            self.assertTrue(chunks)
+            for opts in self.SETS:
+                with self.subTest(layout=layout, crlf=nl != "\n", opts=label(opts)):
+                    self.assertEqual(parts(self.build(main, opts, label(opts)))[2], chunks)
+
+    def test_no_assets_stops(self):
+        main = asset_project(os.path.join(self.tmp, "none"), "none")
+        with self.assertRaises(SystemExit) as e:
+            self.build(main, frozenset())
+        self.assertIn("no asset chunks", str(e.exception))
+
+    def test_module_section_stops(self):
+        """Unminified, TIC-80 would cut the code at a module's section tag;
+        minified, the section is comments and would vanish silently."""
+        main = asset_project(os.path.join(self.tmp, "modsec"), "minimal")
+        util = os.path.join(os.path.dirname(main), "util.lua")
+        line = read_text(util).count("\n") + 2
+        with open(util, "a", encoding="utf-8") as f:
+            f.write("\n-- <MAP>\n-- 000:0102030405\n-- </MAP>\n")
+        for opts in self.SETS:
+            with self.subTest(opts=label(opts)), self.assertRaises(SystemExit) as e:
+                self.build(main, opts)
+            self.assertIn(f"util.lua:{line} starts an asset section (-- <MAP>)",
+                          str(e.exception))
+
+    def test_module_prose_tag_minified(self):
+        """`-- <MAP> notes` is a comment, not a section: minifying removes it
+        (the unminified stop is test_tag_line_guard's)."""
+        main = asset_project(os.path.join(self.tmp, "prose"), "minimal")
+        with open(os.path.join(os.path.dirname(main), "util.lua"), "a",
+                  encoding="utf-8") as f:
+            f.write("\n-- <MAP> region notes\n")
+        self.assertNotIn("region notes", self.build(main, M.parse_options("comments")))
+
+
 @unittest.skipUnless(os.environ.get("TICPAK_BOOT"), "set TICPAK_BOOT=1 to boot TIC-80")
 class TestBoot(unittest.TestCase):
-    """Every effective set's project bundle boots in real TIC-80 and saves a
-    .tic that passes check.py (slow: one headless TIC-80 run per set)."""
+    """Bundles boot in real TIC-80 and save a .tic that passes check.py and
+    holds main.lua's assets byte for byte (slow: one headless TIC-80 run per
+    bundle): the project under every effective set, then every asset layout."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="minify-boot-")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def boot(self, main, opts, out):
+        t = bundle.Target(main, "minitest_project", os.path.join(self.tmp, out))
+        with contextlib.redirect_stdout(io.StringIO()):
+            bundle.bundle(t, minify_options=opts)
+            tic = run.verify(t)                   # exits on failure
+        self.assertTrue(check.check_tic(tic, quiet=True))
+        want, got = text_assets(parts(read_text(main))[2]), tic_assets(tic)
+        self.assertTrue(want)
+        for key, data in want.items():
+            self.assertEqual(got.get(key, b""), data, f"{key[0]} bank {key[1]}")
 
     def test_boots(self):
-        tmp = tempfile.mkdtemp(prefix="minify-boot-")
-        try:
-            main = os.path.join(HERE, "project", "main.lua")
-            for i, opts in enumerate(EFFECTIVE, 1):
-                with self.subTest(opts=label(opts)):
-                    print(f"\nboot {i}/{len(EFFECTIVE)}: {label(opts)}", file=sys.stderr)
-                    t = bundle.Target(main, "minitest_project",
-                                         os.path.join(tmp, label(opts).replace(",", "+")))
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        bundle.bundle(t, minify_options=opts)
-                        tic = run.verify(t)                   # exits on failure
-                    self.assertTrue(check.check_tic(tic, quiet=True))
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        for i, opts in enumerate(EFFECTIVE, 1):
+            with self.subTest(opts=label(opts)):
+                print(f"\nboot {i}/{len(EFFECTIVE)}: {label(opts)}", file=sys.stderr)
+                self.boot(PROJECT_MAIN, opts, label(opts).replace(",", "+"))
+
+    def test_asset_layouts(self):
+        for layout, nl in ASSET_PROJECTS:
+            with self.subTest(layout=layout, crlf=nl != "\n"):
+                print(f"\nboot assets: {layout}{' crlf' if nl != chr(10) else ''}",
+                      file=sys.stderr)
+                main = asset_project(os.path.join(self.tmp, f"src-{layout}{len(nl)}"),
+                                     layout, nl)
+                self.boot(main, M.ALL_OPTIONS, f"out-{layout}{len(nl)}")
 
 
 if __name__ == "__main__":

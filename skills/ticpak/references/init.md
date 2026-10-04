@@ -69,6 +69,10 @@ function TIC() game_update() game_draw() end
   `-- <MAP> layout notes`. TIC-80's loader reads such a line as the start of
   the asset sections and cuts the code there. Indent such comments, or reword
   them. An unminified build stops on one and names the line.
+- **Asset sections belong in `main.lua` only.** ticpak copies `main.lua`'s
+  sections into the package unchanged and packages no others. A section in a
+  module (a tag such as `-- <MAP>` alone on its line) stops every build,
+  minified or not. Move it into `main.lua`.
 
 ## New project
 

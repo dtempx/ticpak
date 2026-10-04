@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Console helpers for ticpak: message paths, the -v switch, the
+"""Console helpers for ticpak: message paths, the --verbose switch, the
 flush-left output filter, and the interactive prompts.
 """
 import os
 import re
 import sys
 
-VERBOSE = False       # -v/--verbose: progress and the check's detail on screen
+VERBOSE = False       # --verbose: progress and the check's detail on screen
 
 
 def detail(*args, **kw):
-    """print() only with -v/--verbose."""
+    """print() only with --verbose."""
     if VERBOSE:
         print(*args, **kw)
 

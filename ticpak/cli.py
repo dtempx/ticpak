@@ -11,7 +11,7 @@ work:
   run.py      find TIC-80, boot the bundle headless, save <name>.tic
   report.py   check the .tic (check.py), write <name>.txt, the summary
   header.py   the metadata header: output name, missing tags, filling in
-  console.py  -v, the flush-left console, the prompts
+  console.py  --verbose, the flush-left console, the prompts
   minify.py   the minifier;  check.py  the .tic checker
 """
 import argparse
@@ -32,9 +32,9 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak                          interactive: status, or asks to build
   ticpak build                    build + check if out of date
   ticpak build -f                 build + check regardless (--force)
-  ticpak build -v                 ...showing progress and the check's detail
+  ticpak build --verbose          ...showing progress and the check's detail
   ticpak check                    check the existing .tic: summary only
-  ticpak check -v                 ...and the full check report
+  ticpak check --verbose          ...and the full check report
   ticpak build -f -m              every minify option (smallest cart)
   ticpak build -f -m=comments,whitespace   just those minify options
   ticpak build path/to/main.lua   a cart elsewhere
@@ -97,6 +97,23 @@ def ask_build_settings(ui, minify, name, out_dir):
     return minify, name, out_dir
 
 
+def build_command(source, minify, name, default_name, out_dir):
+    """The `ticpak build` command line that repeats an interactive build's
+    answers, leaving out anything that is already the default."""
+    parts = ["ticpak", "build"]
+    if source:
+        parts.append(source)
+    if minify == minifier.ALL_OPTIONS:
+        parts.append("-m")
+    elif minify:
+        parts.append("-m=" + ",".join(o for o in minifier.OPTIONS if o in minify))
+    if name != default_name:
+        parts += ["-n", name]
+    if out_dir != "dist":
+        parts += ["-o", out_dir]
+    return " ".join(f'"{p}"' if any(c.isspace() for c in p) else p for p in parts)
+
+
 def parse_args(argv):
     """(command or None, argparse namespace, parser) for a command line."""
     ap = argparse.ArgumentParser(
@@ -110,16 +127,13 @@ def parse_args(argv):
                     " checks the named .tic/.lua files instead of the project's"
                     " package; `minify` runs the minifier on its own.",
         epilog=EXAMPLES, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--version", action="version", version=f"ticpak {__version__}")
+    ap.add_argument("-v", "--version", action="version", version=f"ticpak {__version__}")
     ap.add_argument("sources", nargs="*", metavar="SOURCE",
                     help="the cart (main.lua) or a directory holding it"
                          " (default: ./main.lua, then ./src/main.lua); with"
                          " `check`, files (.tic/.lua) to check directly")
     ap.add_argument("-f", "--force", action="store_true",
                     help="build: rebuild even if the package is up to date")
-    ap.add_argument("-v", "--verbose", action="store_true",
-                    help="show progress and the check's detail (with `check`:"
-                         " the full check report), not just the summary")
     ap.add_argument("-q", "--quiet", action="store_true",
                     help="check FILE...: print only violations (exit code 0/1)")
     ap.add_argument("-o", "--out", metavar="DIR",
@@ -133,6 +147,9 @@ def parse_args(argv):
                          " option; --minify=OPTION,... only those ("
                          + ", ".join(minifier.OPTIONS) + "; see README.md)."
                          " Without it the bundle is not minified")
+    ap.add_argument("--verbose", action="store_true",
+                    help="show progress and the check's detail (with `check`:"
+                         " the full check report), not just the summary")
     # The command is peeled off by hand: argparse cannot tell an optional
     # subcommand from the optional SOURCE positional.
     command = argv[0] if argv and argv[0] in COMMANDS else None
@@ -207,7 +224,7 @@ def main(argv=None):
     out_dir = args.out or "dist"
     t = Target(cart, name or "game", out_dir)
 
-    fresh = False
+    fresh, rerun = False, None
     if os.path.isfile(t.tic):
         fresh, status = freshness(t)
         print(status)
@@ -223,6 +240,8 @@ def main(argv=None):
             Prompts(), args.minify, t.name, out_dir)
         t = Target(cart, name, out_dir)
         command, args.force = "build", True
+        rerun = build_command(args.source, args.minify, name,
+                              package_name(meta), out_dir)
 
     if command == "check":
         if not os.path.isfile(t.tic):
@@ -234,9 +253,15 @@ def main(argv=None):
         print("\n".join(size_summary(t.tic, unminified_size(t))))
         print("hint: ticpak build -f to force rebuild")
         return
-    unminified = bundle(t, minify_options=args.minify)
-    verify(t)
-    check_summary(t, unminified)
+    try:
+        unminified = bundle(t, minify_options=args.minify)
+        verify(t)
+        check_summary(t, unminified)
+    finally:
+        # Also after a failed boot or a limit violation: the fix is usually
+        # in the code, and the rebuild wants the same settings.
+        if rerun:
+            print(f"hint: to build with these settings again: {rerun}")
 
 
 if __name__ == "__main__":

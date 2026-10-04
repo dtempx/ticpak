@@ -8,12 +8,12 @@ them.
 ```
 python tests/options/test_options.py              # ~2 s
 python tests/options/test_options.py -k Behaviour # one class
-TICPAK_BOOT=1 python tests/options/test_options.py -k Boot   # ~3 min, runs TIC-80
+TICPAK_BOOT=1 python tests/options/test_options.py -k Boot   # ~4 min, runs TIC-80
 ```
 
 Needs `lupa` (`pip install lupa`) for the behaviour tests, which skip without
 it. The Boot class needs the TIC-80 Pro binary (found as `ticpak` finds it)
-and is opt-in because it takes about 3 minutes: 17 headless TIC-80 runs.
+and is opt-in because it takes about 4 minutes: 22 headless TIC-80 runs.
 
 ## What is tested
 
@@ -32,7 +32,8 @@ on every sample cart.
 | Nominify | variable-level NOMINIFY: markers found on the right lines (not inside strings); the marked names survive `rename` and are reported |
 | NominifyFunctionsAndModules | function- and module-level NOMINIFY: a directive on the declaration line, in the block above, in the block below; a function expression; an unused protected function (kept even by `extra`); a nested one; a module's top block; module level winning over function level; a blank line ending a block (module level at the top, nothing elsewhere); the whole cart; header tags not counting. Every protected body is byte for byte under every option set, and the names it uses (`pinned_*`, `PINNED_*`) survive `rename` and `constants` |
 | Bundle | the multi-module [project/](project/) bundled by `ticpak.bundle.bundle()` for every set: assets and header kept, option signatures, same behaviour as the unminified bundle, `minify_label`, the stop on a `-- <` comment line in an unminified bundle |
-| Boot | (opt-in) each set's project bundle boots headless in TIC-80 and saves a `.tic` that passes `ticpak check` |
+| BundleAssets | the project rebuilt with each of `make_samples`' asset layouts, plus bank 0 with CRLF, bundled with no options, `comments` and all: asset sections kept by the bundler's own cart split; a cart with no sections stops; a section in a module stops every build, naming its line; a prose `-- <MAP> notes` comment in a module is just stripped when minified |
+| Boot | (opt-in) each set's project bundle, then each asset layout's, boots headless in TIC-80 and saves a `.tic` that passes `ticpak check` and whose asset chunks equal `main.lua`'s sections decoded to bytes |
 
 The suite was checked against deliberate faults (2026-10-03). Each of the
 following made it fail:

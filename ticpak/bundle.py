@@ -9,7 +9,7 @@ import re
 import sys
 
 from . import minify as minifier
-from .check import check_header
+from .check import TEXT_SECTION_RE, check_header
 from .console import detail, fwd, show
 from .header import CHUNK_RE, META_KEYS, cart_code
 
@@ -117,13 +117,32 @@ def assemble(t):
         path = t.module_path(name)
         if not os.path.isfile(path):
             sys.exit(f"bundle: module '{name}' not found at {show(path)}")
+        src = open(path, encoding="utf-8").read()
+        module_sections(src, f"{name.replace('.', '/')}.lua")
         add(f'package.preload["{name}"] = function(...)\n', None, 0)
-        add(open(path, encoding="utf-8").read() + "\n", f"{name.replace('.', '/')}.lua", 1)
+        add(src + "\n", f"{name.replace('.', '/')}.lua", 1)
         add("end\n\n", None, 0)
     add(code[first:], cart_name, code[:first].count("\n") + 1)
     if not code.endswith("\n"):
         origin.append((cart_name, code.count("\n") + 1))
     return "".join(parts), chunks, names, origin
+
+
+# A section tag alone on its line, as TIC-80 writes one; `-- <MAP> notes`
+# is prose, left to tag_lines() (unminified) or stripped as a comment.
+SECTION_LINE_RE = re.compile(TEXT_SECTION_RE.pattern + r"[ \t]*$", re.M)
+
+
+def module_sections(src, fname):
+    """Stop on an asset section in a module: only the cart's are packaged.
+    Unminified, TIC-80 would cut the code at its tag; minified, it is
+    comments and would vanish without a word."""
+    m = SECTION_LINE_RE.search(src)
+    if m:
+        line = src.count("\n", 0, m.start()) + 1
+        sys.exit(f"bundle: {fname}:{line} starts an asset section ({m.group(0).strip()}),"
+                 " but only main.lua's asset sections are packaged - move it"
+                 " into main.lua")
 
 
 def unminified_size(t):
@@ -188,6 +207,11 @@ def bundle(t, minify_options=frozenset()):
         f.write(out + chunks)
     if res.report is not None:
         write_maps(t, res, origin)
+    else:
+        # Maps from an earlier minified build would decode this bundle wrongly.
+        for path in (t.map_txt, t.map_json):
+            if os.path.isfile(path):
+                os.remove(path)
     if not check_header(out, quiet=True):
         check_header(out)
         sys.exit(f"bundle: {show(t.lua)} lost header fields"

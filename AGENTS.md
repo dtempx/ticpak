@@ -14,7 +14,7 @@ python -m ticpak                      # run from a clone without installing
 
 python tests/options/test_options.py              # every minify-option combination (~2 s)
 python tests/options/test_options.py -k Behaviour # one test class (stdlib unittest)
-TICPAK_BOOT=1 python tests/options/test_options.py -k Boot   # boots each in TIC-80 (~3 min)
+TICPAK_BOOT=1 python tests/options/test_options.py -k Boot   # boots each in TIC-80, compares .tic assets (~4 min)
 python tests/minify/run.py [fold|bytecode|fixtures]          # minifier suites
 python tests/minify/difftest.py path/to/game/tic80            # frame-by-frame diff on a real port
 python tests/minify/difftest.py --all                         # every <game>/tic80 under $TICPAK_GAMES
@@ -31,11 +31,15 @@ There is no linter or pytest config; tests are plain scripts using stdlib `unitt
 - Target Lua is TIC-80 1.2's embedded **Lua 5.3** (no `<const>`); every minifier semantic rule is Lua 5.3's.
 - `build` and `check` must never prompt; only the bare `ticpak` command is interactive, and it exits with status 2 when there is no terminal.
 
+## Before committing
+
+Recommend bumping `version` in `pyproject.toml` before the next commit when it changes behaviour, options or output. Users install from git, and the version is how they, and bug reports, tell builds apart. Bump `__version__` in `ticpak/__init__.py` to match, because `ticpak --version` prints that one.
+
 ## Architecture
 
 `cli.py` is only the front end (argparse, interactive questions, dispatch). The pipeline:
 
-1. `bundle.py` — `find_cart` → `Target` (all output paths), `freshness` (timestamp-only up-to-date check), `assemble` (header + stub + one `package.preload["mod"] = function(...) ... end` per required module; asset chunks set aside; `origin` maps each bundle line to `file:line`), then `minify.minify_cart_ex`, then writes `<name>.lua` and, for any option past `comments`, the `.minify.txt`/`.minify.json` decode maps. Also guards against unminified comment lines starting `-- <`, which TIC-80 reads as the start of asset sections.
+1. `bundle.py` — `find_cart` → `Target` (all output paths), `freshness` (timestamp-only up-to-date check), `assemble` (header + stub + one `package.preload["mod"] = function(...) ... end` per required module; asset chunks set aside; `origin` maps each bundle line to `file:line`), then `minify.minify_cart_ex`, then writes `<name>.lua` and, for any option past `comments`, the `.minify.txt`/`.minify.json` decode maps. Also guards against unminified comment lines starting `-- <`, which TIC-80 reads as the start of asset sections, and stops on an asset section in a module (minified, it would be stripped silently): only `main.lua`'s sections are packaged.
 2. `run.py` — finds TIC-80 Pro, boots the bundle headless from an isolated folder, saves `<name>.tic`.
 3. `report.py` + `check.py` — parse the `.tic` chunks, check code budget/banks/cover/header, write `<name>.txt` and the summary. `check.py` also serves `ticpak check FILE...`.
 4. `header.py` — metadata tags, output name (`saveid` → `title` → slug), filling in missing tags.

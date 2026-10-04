@@ -7,7 +7,7 @@ import io
 import re
 import sys
 
-from . import console                    # console.VERBOSE is read live (-v)
+from . import console                    # console.VERBOSE is read live (--verbose)
 from .bundle import FREE_LIMIT
 from .check import check_tic, parse_tic, CHUNK_RAM_LIMIT, CODE_CHUNKS, COVER_CHUNKS
 from .console import detail, flat_line, show
@@ -69,8 +69,8 @@ def size_summary(tic, unminified=None):
 def check_summary(t, unminified=None, write_report=True, full=False):
     """The check: check.py's full report plus the size summary to t.txt; on
     screen the summary last, with the report's detail (sizes, anything near
-    (>= 90%) or past a limit, every flagged line) only with -v, or the whole
-    report with full (`check -v`). Violations always show. Exits 1 on one."""
+    (>= 90%) or past a limit, every flagged line) only with --verbose, or the whole
+    report with full (`check --verbose`). Violations always show. Exits 1 on one."""
     tic = t.tic
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -81,7 +81,7 @@ def check_summary(t, unminified=None, write_report=True, full=False):
             f.write(f"check: {show(tic)}\n" + flatten_report(buf.getvalue())
                     + "\n" + "\n".join(summary) + "\n")
 
-    if full and console.VERBOSE:         # `check -v`: the whole check report
+    if full and console.VERBOSE:         # `check --verbose`: the whole check report
         print(f"check:  {show(tic)}")
         print(buf.getvalue(), end="")
         print("\n".join(summary))
@@ -113,7 +113,7 @@ def check_summary(t, unminified=None, write_report=True, full=False):
         detail(f"  NEAR  at or near capacity: {', '.join(near)}")
     for line in buf.getvalue().splitlines():
         if re.match(r"\s+(OVER|MISSING)\b", line):
-            print(line)                     # violations show without -v
+            print(line)                     # violations show without --verbose
         elif re.match(r"\s+(WARN|INFO)\b", line):
             detail(line)
     if console.VERBOSE or not ok:

@@ -1,6 +1,6 @@
 # ticpak
 
-**Package a multi-file TIC-80 Lua project into one cart you can upload.**
+**Package a multi-file TIC-80 Lua project into a single cart suitable for publishing.**
 
 TIC-80 carts are a single file, but a game of any size is easier to write as
 several Lua modules loaded with `require`. That works while you develop, in
@@ -12,7 +12,7 @@ upload.
 
 ```
 source: main.lua (21 modules)
-cart: dist/wavynavy.tic (up-to-date)
+cart: dist/mygame.tic (up-to-date)
 size: 110K
 code: 41K (37%)
 assets: 69K (63%)
@@ -143,6 +143,29 @@ ticpak looks for `./main.lua`, then `./src/main.lua`, or takes the path you
 give it. Modules are loaded from the cart's own directory, by the names
 literally written in `require "..."`.
 
+### Asset sections
+
+The `-- <TILES>` ... `-- </TILES>` block above is an asset section. TIC-80
+Pro writes one for each kind of data your game has when it saves a text cart:
+`TILES`, `SPRITES`, `MAP`, `FLAGS`, `WAVES`, `SFX`, `PATTERNS`, `TRACKS`,
+`PALETTE` and `SCREEN` (the cover image), with a bank number for banks 1-7
+(`-- <MAP1>`). Everything from the first such line to the end of the file is
+asset data, stored as hex in comment lines.
+
+- **Assets live in `main.lua`.** Edit them in TIC-80 Pro with `main.lua`
+  loaded, save (Ctrl+S), and rebuild. Modules hold code only.
+- **ticpak copies them unchanged.** It splits `main.lua` at the first asset
+  tag and appends everything after it to the bundle byte for byte, after the
+  inlined code. The minifier never sees the asset sections, so no
+  minification option can change them. TIC-80 then converts them into the
+  `.tic`'s binary chunks, and the check reports each section's size against
+  its limit and which banks carry data.
+- **Asset sections in a module are an error.** Only `main.lua`'s are
+  packaged. Left in a module, a section would either cut the code short
+  ([why](#a-pitfall-comments-that-look-like-asset-tags)) or, once
+  minification strips comments, disappear. So ticpak stops, names the
+  module's line, and asks you to move the section into `main.lua`.
+
 ## What it does
 
 1. **Reads the metadata header.** The `title`, `author`, `desc`, `site`,
@@ -151,7 +174,7 @@ literally written in `require "..."`.
    offers to [fill them in](#when-the-header-is-incomplete).
 2. **Names the output** after the header's `saveid`, else its `title`,
    lowercased, with anything but letters, digits, `_`, `.` and `-` turned into
-   `-` (`Wavy Navy` becomes `wavy-navy`). `-n` overrides it.
+   `-` (`My Game` becomes `my-game`). `-n` overrides it.
 3. **Bundles.** Every required module is inlined as a `package.preload`
    entry, so `require` still works with no filesystem. The code is minified
    if you asked for it, and the asset sections are copied byte for byte into
@@ -197,9 +220,9 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 | *(no `-m`)* | no minification: the inlined source, verbatim |
 | `-o`, `--out DIR` | output folder, relative to the current folder (default `dist`) |
 | `-n`, `--name NAME` | output name without extension (default: saveid, else title) |
-| `-v`, `--verbose` | also show progress and the check's detail (`check -v`: the full report) |
 | `-q`, `--quiet` | `check FILE...` only: print only violations |
-| `--version` | print the version |
+| `-v`, `--version` | print the version |
+| `--verbose` | also show progress and the check's detail (`check --verbose`: the full report) |
 
 ```
 ticpak                          # interactive
@@ -207,9 +230,9 @@ ticpak build                    # build + check, if anything changed
 ticpak build -f                 # build + check, always
 ticpak build -f -m              # every minify option: the smallest cart
 ticpak build -f -m=comments,whitespace   # only those options
-ticpak build -v                 # with progress and the check's detail
+ticpak build --verbose          # with progress and the check's detail
 ticpak check                    # summary of the existing .tic
-ticpak check -v                 # ...and the full check report
+ticpak check --verbose          # ...and the full check report
 ticpak build -n mygame          # dist/mygame.lua + dist/mygame.tic
 ticpak build -o out             # write to ./out instead of ./dist
 ticpak build path/to/main.lua   # a cart elsewhere (or its folder)
@@ -258,10 +281,10 @@ modules it requires, and the `.tic` with its state.
 
 ```
 source: main.lua (21 modules)
-cart: dist/wavynavy.tic (up-to-date)
-cart: dist/wavynavy.tic (out-of-date: state_play.lua, grid.lua changed)
-cart: dist/wavynavy.tic (out-of-date: dist/wavynavy.lua missing)
-cart: dist/wavynavy.tic (not built yet)
+cart: dist/mygame.tic (up-to-date)
+cart: dist/mygame.tic (out-of-date: player.lua, enemies.lua changed)
+cart: dist/mygame.tic (out-of-date: dist/mygame.lua missing)
+cart: dist/mygame.tic (not built yet)
 ```
 
 Up to date means the `.tic`, and the `.lua` bundle beside it, are newer than
@@ -291,7 +314,7 @@ assets: 69K (63%)
   `not minified`.
 
 By default the summary, the status lines and any error or limit violation are
-all ticpak prints. `-v` adds the progress lines, every size, anything at 90%
+all ticpak prints. `--verbose` adds the progress lines, every size, anything at 90%
 or more of a limit, and every warning. Console output is flush left, matching
 the `.txt` report.
 
@@ -301,7 +324,7 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 `hint: answer the questions below to build it (Ctrl+C to cancel)` and asks:
 
 ```
-? Output name (no extension): [wavynavy]
+? Output name (no extension): [mygame]
 ? Minification:
   1) all  - every option (smallest cart)
   2) none - no minification (the inlined source verbatim)  [default]
@@ -318,6 +341,14 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 Options given on the command line (`-m`, `-n`, `-o`) become the defaults.
 Without questionary, type the numbers to toggle (`2,5`) and press Enter on an
 empty line to accept.
+
+After the build it prints the `build` command that repeats your answers, for
+later rebuilds, scripts, or setting up the same build elsewhere. Answers that
+match the defaults are left out:
+
+```
+hint: to build with these settings again: ticpak build -m=comments,whitespace -n mygame-lite
+```
 
 If the `.tic` already exists, it asks nothing. It prints the status lines
 and `hint: ticpak build -f to force rebuild`, and exits.
@@ -371,7 +402,7 @@ On one 21-module game (code characters; the free limit is 65,536):
 Every option past `comments` also writes two files you need to decode a
 runtime error in the packaged cart: `<name>.minify.txt` (what each pass did)
 and `<name>.minify.json` (each output line's source `file:line`, and every
-renamed identifier).
+renamed identifier). See [The decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson).
 
 **Write `-m=a,b` with `=`, or put `SOURCE` first.** In `-m path/main.lua` the
 path would be read as the option list; ticpak says so if it happens.
@@ -408,7 +439,9 @@ TIC-80's loader reads any line starting `-- <` as the start of the asset
 sections and cuts the code there. An unminified bundle keeps every comment,
 so a comment such as `-- <MAP> region ...` in a module would break the cart.
 ticpak stops before booting such a bundle and names the line. Reword the
-comment, or minify with at least `comments`.
+comment, or minify with at least `comments`. A real asset section in a
+module (its tag alone on the line) stops the build either way: move it into
+`main.lua` (see [Asset sections](#asset-sections)).
 
 ## The TIC-80 binary
 
@@ -423,17 +456,116 @@ with `-DBUILD_PRO=On`. ticpak looks for it in this order:
 
 ## Output
 
+A build writes these files to `dist/` (or the `-o` folder), all named after
+the output name:
+
+| File | What it is | Written |
+|---|---|---|
+| `<name>.lua` | the bundle: your whole game as one text cart | every build |
+| `<name>.tic` | the same cart in TIC-80's binary format: **the file to upload** | every build |
+| `<name>.txt` | the check's full report, then the summary | every build and `ticpak check` |
+| `<name>.minify.txt` | the minifier's report: what each pass did | builds with any minify option past `comments` |
+| `<name>.minify.json` | line and rename maps for decoding runtime errors | builds with any minify option past `comments` |
+
+Every file is regenerated from your sources, so add `dist/` to your
+`.gitignore` and never edit anything in it. A build that writes no minify
+files deletes any left over from an earlier minified build, because they
+would no longer match the bundle.
+
+### The `.lua` and the `.tic`
+
+Both hold the same game: the same code and the same assets. They differ in
+format, and in who writes them.
+
+**`<name>.lua` is written by ticpak.** It is a text cart, the same format as
+your `main.lua`: the metadata header, then the code, then the asset sections
+(`-- <TILES>`, `-- <MAP>`, ...) as hex text. ticpak builds it from
+`main.lua`'s header, then each module wrapped in a
+`package.preload["name"] = function(...) ... end` entry, then `main.lua`'s own
+code (the `require` lines and callbacks). It minifies that code if you asked,
+and copies `main.lua`'s asset sections after it byte for byte. You can open
+it in any editor. When TIC-80 reports an error at a line number, the number
+refers to a line of this file. Only TIC-80 Pro can load a text cart.
+
+**`<name>.tic` is written by TIC-80.** It is TIC-80's binary cart format:
+the code and each asset section stored as binary chunks, with no hex
+encoding, so it is smaller than the `.lua`. ticpak doesn't produce it itself.
+It copies the `.lua` into an empty temporary folder and runs TIC-80 Pro
+headless there, twice:
+
+1. `load <name>.lua & run` boots the game. Any syntax error, runtime error
+   at startup or missing module fails the build here. The folder holds
+   nothing else, so the bundle can't quietly fall back on a module file on
+   disk.
+2. `load <name>.lua & save <name>.tic & exit` has TIC-80 convert the cart.
+   ticpak copies the result to `dist/` and checks it.
+
+Every TIC-80 can load the `.tic`: the free build, the web player and
+tic80.com. Upload it, or send it to anyone with TIC-80. Keep the `.lua` for
+reading and decoding errors, and for exports: load it in TIC-80 and run
+`export html <name>` or `export win <name>` for a web or native build (both
+need network access).
+
+### The check report: `<name>.txt`
+
+This is the check of the `.tic` in full: every asset section's size against
+its limit, how the code is stored, which memory banks carry data, every
+header tag, whether there is a cover screenshot, any violations, and then
+the summary. `--verbose` prints the parts that need attention, and
+`ticpak check --verbose` prints all of it.
+
 ```
-dist/<name>.lua           the bundled text cart (export html / export win from this)
-dist/<name>.tic           the binary cart: the file to upload
-dist/<name>.txt           the check's full report, then the summary
-dist/<name>.minify.txt    any option past comments: what each pass did
-dist/<name>.minify.json   any option past comments: line and rename maps
+check: dist/mygame.tic
+.tic file 137,708 bytes (134.5 KB)
+PALETTE                  48 bytes (50%)
+SPRITES               8,187 bytes (100%)
+MAP                  32,575 bytes (100%)
+...
+CODE part 1          65,536 bytes (100% of a 64 KB chunk)
+CODE part 2           1,564 bytes (2% of a 64 KB chunk)
+banks  1 of 8 carry asset data (bank 0 boots; 1-7 load via sync())
+...
+header complete
+title: My Game
+...
+screenshot (SCREEN) present
+all checks OK
+
+size: 134K
+...
 ```
 
-Add `dist/` to your `.gitignore`. For a web or native build, load
-`dist/<name>.lua` in TIC-80 and run `export html <name>` or
-`export win <name>` (both need network access).
+### The decode maps: `<name>.minify.txt` and `<name>.minify.json`
+
+Past `comments`, minification changes line numbers and renames local
+variables, so an error from the packaged cart no longer points at your
+sources. Say TIC-80 reports:
+
+```
+[string "-- title: My Game..."]:37: attempt to index a nil value (local 'b')
+```
+
+Line 37 is a line of the minified `<name>.lua`, and `b` is a renamed
+variable. `<name>.minify.json` translates both:
+
+- `"lines"` maps each bundle line to the source line it came from. Look up
+  `"37"` and you get, say, `["enemies.lua", 112]`. Lines that ticpak added
+  itself map to `[null, 0]`.
+- `"renames"` lists every renamed identifier, such as
+  `{"new": "b", "old": "target", "kind": "local", "source": ["enemies.lua", 98]}`.
+  A short name can be reused in different scopes, so pick the entry whose
+  source is near the line you found.
+
+`<name>.minify.txt` is the minifier's report for people: the code size after
+each pass, then every constant inlined, every piece of code or variable
+removed, every API function aliased, and every name kept by `NOMINIFY`, each
+with its `file:line`. Read it when you want to know what happened to a
+particular name, or attach it when reporting a minifier bug. The file
+formats are described in [docs/minify.md](docs/minify.md#outputs).
+
+Without minification, or with `comments` only, there are no maps: open
+`<name>.lua` at the reported line. The nearest
+`package.preload["..."] = function(...)` above it names the module.
 
 ## AI agent skills
 
@@ -466,7 +598,7 @@ Or copy `skills/ticpak/` into your agent's skills directory yourself
 | `ticpak/cli.py` | the command line, `--help`, the interactive questions, `main()` |
 | `ticpak/bundle.py` | finds the cart, inlines the modules, minifies, writes `<name>.lua` and the decode maps; the up-to-date check; the `-- <` guard |
 | `ticpak/run.py` | finds TIC-80 Pro, boots the bundle headless, saves `<name>.tic` |
-| `ticpak/report.py` | the check report in `<name>.txt`, the summary, the `-v` detail |
+| `ticpak/report.py` | the check report in `<name>.txt`, the summary, the `--verbose` detail |
 | `ticpak/header.py` | the metadata header: the output name, missing tags, filling them in |
 | `ticpak/console.py` | console output and the prompts (questionary or plain) |
 | `ticpak/check.py` | the `.tic` limit and header checker (`ticpak check FILE...`) |
@@ -485,7 +617,10 @@ python tests/minify/run.py           # the minifier's fixtures and fuzzing
 
 `tests/options` builds sample carts with every subset of minify options and
 runs the original and minified code side by side in Lua 5.3, comparing what
-they draw. Set `TICPAK_BOOT=1` to also boot each one in TIC-80 (about 3
+they draw. It also checks that every asset layout (bank 0, banks 1-7, a
+`SCREEN` cover, CRLF line endings) comes through the minifier and the bundle
+byte for byte. Set `TICPAK_BOOT=1` to also boot the bundles in TIC-80 and
+compare the saved `.tic`'s asset chunks with `main.lua`'s sections (about 4
 minutes). `tests/minify` checks the minifier on fixtures and random
 expressions; set `TICPAK_GAMES` to a folder of `<game>/tic80/` projects to
 also run real games frame by frame against their minified bundles.
