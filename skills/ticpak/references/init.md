@@ -1,0 +1,173 @@
+# ticpak init: set up a multi-file project
+
+`init` has no ticpak command. You set the project up by hand, then prove it
+with `ticpak build`. First look at the folder:
+
+| The folder has | Do |
+|---|---|
+| no `main.lua` | [New project](#new-project) |
+| a `main.lua` with all the code in it | [Split a single-file cart](#split-a-single-file-cart) |
+| a `main.lua` that already `require`s modules | [Review an existing project](#review-an-existing-project) |
+
+## The layout ticpak expects
+
+```
+mygame/
+  main.lua        the cart: metadata header, entry stub, asset sections
+  game.lua        modules, beside the cart...
+  state/play.lua  ...or in subfolders: require "state.play"
+  dist/           ticpak's output: add it to .gitignore
+```
+
+`main.lua` has three parts, in this order:
+
+```lua
+-- title:   My Game
+-- author:  your name
+-- desc:    one line about the game
+-- site:    https://github.com/you/mygame
+-- license: MIT License
+-- version: 0.1
+-- script:  lua
+
+require "game"
+
+function BOOT() game_init() end
+function TIC() game_update() game_draw() end
+
+-- <PALETTE>
+-- 000:1a1c2c5d275db13e53ef7d57ffcd75a7f07038b76425717929366f3b5dc941a6f673eff7f4f4f494b0c2566c86333c57
+-- </PALETTE>
+```
+
+1. **The metadata header.** See the header rule in [SKILL.md](../SKILL.md).
+   Add `-- saveid: <author>_<game>` if the game uses `pmem`; see
+   [Saves](#saves-need-a-saveid).
+2. **The entry stub.** The `require` lines and the callbacks, and nothing
+   else.
+3. **The asset sections** (`-- <TILES>`, `-- <MAP>`, `-- <SFX>`, ...). TIC-80
+   writes these when you save from its editors, and ticpak needs at least
+   one. The `PALETTE` section above is TIC-80's default palette, so a new
+   cart has one before anything has been drawn.
+
+## The rules ticpak relies on
+
+- **List every module in `main.lua`, with a literal name.** ticpak inlines
+  exactly the modules named by `require "name"` or `require("name")` in
+  `main.lua`'s code. A module that only another module requires is **not**
+  bundled, and the build fails its boot test with `module 'x' not found`.
+  Modules may also require each other (Lua caches each one), but every one
+  must appear in `main.lua`'s list too.
+- **The `require` order is the execution order.** A module's top-level code
+  runs at its first `require`, so put modules that define constants and
+  helpers first. Keep top-level code to definitions and do runtime setup in
+  `BOOT()`.
+- **Names are paths from the cart's folder.** `require "player"` is
+  `player.lua` beside `main.lua`, and `require "state.play"` is
+  `state/play.lua`. Don't name a module `main`.
+- **No line may start `-- <` in column 0** in any module, e.g.
+  `-- <MAP> layout notes`. TIC-80's loader reads such a line as the start of
+  the asset sections and cuts the code there. Indent such comments, or reword
+  them. An unminified build stops on one and names the line.
+
+## New project
+
+1. Ask for the title and a one-line description, and for `site`, `license`
+   and `version`. Offer ticpak's own defaults: the git `origin` URL,
+   `MIT License` and `0.1`.
+2. Write `main.lua` as in the layout above, requiring one module.
+3. Write that module, defining what the stub calls. For example, `game.lua`
+   with `game_init`, `game_update` and `game_draw`, where `game_draw` calls
+   `cls()` and prints the title.
+4. Add `dist/` to `.gitignore`.
+5. Run `ticpak build -f` to prove the bundle boots on its own (see
+   [build.md](build.md)), and tell the user how to run it while developing.
+
+## Split a single-file cart
+
+1. Keep the header and the asset sections in `main.lua`. Fill in any missing
+   header tags.
+2. Move the code into modules by concern: constants, helpers, one module per
+   entity or system, one per game state. Keep each module roughly under 150
+   lines.
+3. Replace the moved code in `main.lua` with the `require` lines, in an order
+   where each module's top-level code finds what it needs, followed by `BOOT`
+   and `TIC`.
+4. Run `ticpak build -f`. If the original cart had a known-good behaviour,
+   compare it against the built cart in TIC-80.
+
+Shared state that many modules use (the score, the current state's update and
+draw functions) can stay global. A module that owns its data can return a
+table (`local M = {} ... return M`), and callers bind it with
+`local player = require "player"`.
+
+## Review an existing project
+
+Check it against the rules above, in this order:
+
+1. `ticpak-check main.lua`: the header is complete.
+2. Every `require` anywhere in the modules names a module that `main.lua`
+   also requires.
+3. No module has a column-0 `-- <` line (`grep -n "^-- <" *.lua`, apart from
+   `main.lua`'s asset sections).
+4. Nothing blocks the minifier (see [below](#writing-code-that-minifies-well)).
+5. `pmem` without a `saveid`.
+
+Report what you find, fix it if the user agrees, then run `ticpak build -f`.
+
+## The dev loop
+
+- **Launch TIC-80 Pro with the cart's folder as the working directory.**
+  `require` searches `.\?.lua` relative to the process's current directory,
+  not the cart's folder:
+
+  ```
+  cd mygame
+  tic80 main.lua
+  ```
+
+  Launched from anywhere else, it fails with `module '...' not found`.
+- **Edit modules, then press Ctrl+R** (or type `run` in the console). Each run
+  starts a fresh Lua VM, so it reloads every module. TIC-80's auto-reload
+  watches only `main.lua`.
+- **Edit art, map and sound in TIC-80's editors, and save.** Never write game
+  code in TIC-80's code editor, which shows only the stub. Don't rewrite
+  `main.lua` in another program while TIC-80 holds unsaved changes to it,
+  because the last save wins.
+- Press **F7** in the running game to capture the cover screenshot, then
+  save. This writes a `-- <SCREEN>` section, which is the thumbnail tic80.com
+  shows.
+
+## Writing code that minifies well
+
+ticpak's minifier is opt-in (`-m`). It is verified against real Lua 5.3 and
+never changes behaviour. Its whole-program options do assume that the bundle
+is the whole program. Write the game this way and every option stays
+available:
+
+- **Write for the reader, not for size.** Comments, indentation and long names
+  cost nothing in a minified cart. The 64 KB free-editor limit applies to the
+  *packaged* code, which is often less than half the source. Don't golf the
+  modules.
+- **Avoid dynamic global access**: `_G`, `_ENV`, `load`, `loadstring`,
+  `dofile`, `loadfile`, `rawget`, `rawset`, `rawequal`, `debug`, a
+  `require` with a computed name, or `pcall(require, "m")`. Any of these
+  switches off every pass that touches globals. The `.minify.txt` report names
+  the line that caused it.
+- **Mark names something reads as strings.** If a debugger, another cart or a
+  string lookup needs a variable's real name, put `NOMINIFY` in a comment on
+  the line that declares or assigns it. A `NOMINIFY` comment on a function's
+  declaration line, or in the comment block directly above it, keeps the whole
+  function byte for byte. In a module's top comment block it keeps the whole
+  module.
+- Function names, table fields, methods and every TIC-80/Lua global are never
+  renamed. Tracebacks stay readable, and `obj.field` access is always safe.
+
+Details: [docs/minify.md](https://github.com/dtempx/ticpak/blob/main/docs/minify.md).
+
+## Saves need a saveid
+
+Without a `-- saveid:` tag, TIC-80 keys a cart's `pmem` save data by the
+cart's hash. Every rebuild then changes the hash and orphans the player's
+saves. If the game calls `pmem`, add `-- saveid: <author>_<game>`. ticpak also
+uses `saveid` to name its output files.

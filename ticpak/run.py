@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Running TIC-80 for ticpak: find the Pro binary, capture a headless
+run's output, and boot the bundle alone then save <out>/<name>.tic.
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+if os.name != "nt":                 # the pty route below is POSIX-only
+    import pty
+    import select
+
+from .console import detail, show
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def tic80_exe():
+    """The Pro binary: $TIC80, else tools/tic80.exe (Windows) or
+    tools/tic80/build/bin/tic80 (Linux) in the nearest enclosing directory of
+    this script or the cwd that has one, else `tic80` on PATH."""
+    env = os.environ.get("TIC80")
+    if env and os.path.isfile(env):
+        return env
+    for start in (HERE, os.getcwd()):
+        d = os.path.abspath(start)
+        while True:
+            for rel in (("tools", "tic80.exe"), ("tools", "tic80", "build", "bin", "tic80")):
+                p = os.path.join(d, *rel)
+                if os.path.isfile(p):
+                    return p
+            if os.path.dirname(d) == d:
+                break
+            d = os.path.dirname(d)
+    for name in ("tic80", "tic80.exe"):
+        if shutil.which(name):
+            return shutil.which(name)
+    sys.exit("bundle: no TIC-80 Pro binary found - set $TIC80 to its path, or put tic80 on PATH")
+
+
+def _run_tty(cmd, cwd, timeout):
+    """Run cmd capturing output through a pty.
+
+    TIC-80's --cli loop never exits on its own and ignores SIGTERM, so the run
+    has to be killed - and on a pipe its stdio is block-buffered, which loses
+    the unflushed tail (an error message) on the kill. A pty makes it line
+    buffered, so what it printed is what we see.
+
+    (Windows) There is no pty, and none is needed: the Windows build flushes
+    its console output as it goes, so a plain pipe with a timeout catches the
+    boot message and any error line (the same capture the port's check.py
+    smoke test relies on). subprocess.run kills the child on TimeoutExpired
+    and hands back what it had read.
+    """
+    if os.name == "nt":
+        try:
+            done = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout,
+                                  stdin=subprocess.DEVNULL)
+            raw = (done.stdout or b"") + (done.stderr or b"")
+        except subprocess.TimeoutExpired as exc:
+            raw = (exc.stdout or b"") + (exc.stderr or b"")
+        return raw.decode(errors="replace").replace("\r", "")
+    master, slave = pty.openpty()
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=slave, stderr=slave,
+                         stdin=subprocess.DEVNULL, close_fds=True)
+    os.close(slave)
+    chunks, deadline = [], time.time() + timeout
+    while time.time() < deadline:
+        if select.select([master], [], [], 0.2)[0]:
+            try:
+                data = os.read(master, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+        if p.poll() is not None:
+            break
+    if p.poll() is None:
+        p.kill()
+        p.wait()
+    while select.select([master], [], [], 0.1)[0]:
+        try:
+            data = os.read(master, 65536)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    os.close(master)
+    return b"".join(chunks).decode(errors="replace").replace("\r", "")
+
+
+def verify(t):
+    """Boot the bundle t.lua headless on its own, then save t.tic beside it.
+    Returns the .tic's path; exits with TIC-80's output if either step fails."""
+    exe = tic80_exe()
+    lua = os.path.basename(t.lua)
+    tmp = tempfile.mkdtemp(prefix=f"{t.name}-bundle-")
+    shutil.copy(t.lua, os.path.join(tmp, lua))
+    try:
+        cmd = f"load {lua} & run"
+        out = _run_tty([exe, "--fs=.", "--cli", "--skip", "--cmd", cmd], tmp, 10)
+        bad = ('[string "' in out or "stack traceback" in out
+               or "not found" in out or re.search(r"\berror\b", out, re.I))
+        if bad or "loaded!" not in out:
+            for line in out.splitlines():
+                if line.strip():
+                    print("   |", line[:120])
+            print("bundle: FAILED to boot alone")
+            sys.exit(1)
+        detail(f"bundle: boots headless from a directory containing only {lua}")
+        name = os.path.basename(t.tic)
+        # This run ends itself (`& exit`), so the ceiling only has to be
+        # above the worst case - saving a big cart on a thermally
+        # throttled SBC has been seen to take >20 s.
+        out = _run_tty([exe, "--fs=.", "--cli", "--skip", "--cmd",
+                        f"load {lua} & save {name} & exit"], tmp, 90)
+        src = os.path.join(tmp, name)
+        if not os.path.exists(src):
+            for line in out.splitlines():
+                if line.strip():
+                    print("   |", line[:120])
+            sys.exit("bundle: TIC-80 did not write the .tic")
+        shutil.copy(src, t.tic)
+        detail(f"bundle: {show(t.tic)}"
+               f" ({os.path.getsize(src)} bytes) - this is the file to upload")
+        return t.tic
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
