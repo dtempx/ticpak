@@ -16,9 +16,9 @@ Given a text cart (.lua) instead of a .tic, it checks the header and reports
 bank usage from the `-- <MAP1>`-style section tags, so the dev source and the
 bundle can be checked with the same rule:
 
-    ticpak-check dist/<game>.tic
-    ticpak-check main.lua                  # header + bank usage
-    ticpak-check --quiet dist/<game>.tic   # exit code only
+    ticpak check dist/<game>.tic
+    ticpak check main.lua                  # header + bank usage
+    ticpak check -q dist/<game>.tic        # violations and the exit code only
 
 Banks and PRO. Every TIC-80 build's cart loader reads all 8 banks, and sync()
 works in every build: TIC_BANKS is 8 unconditionally in tic.h, and neither
@@ -320,22 +320,3 @@ def check_tic(path, quiet=False):
     if not quiet:
         print("check:  all checks OK" if ok else "check:  VIOLATIONS FOUND")
     return ok
-
-
-def main(argv=None):
-    """`ticpak-check`: check .tic / .lua carts; exits 1 on any violation."""
-    args = sys.argv[1:] if argv is None else argv
-    quiet = "--quiet" in args
-    paths = [a for a in args if not a.startswith("--")]
-    if not paths:
-        sys.exit(f"usage: ticpak-check [--quiet] FILE.tic|FILE.lua ...\n\n{__doc__}")
-    all_ok = True
-    for path in paths:
-        check = check_lua if path.lower().endswith(".lua") else check_tic
-        if not check(path, quiet=quiet):
-            all_ok = False
-    sys.exit(0 if all_ok else 1)
-
-
-if __name__ == "__main__":
-    main()

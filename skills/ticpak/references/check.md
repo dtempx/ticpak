@@ -4,12 +4,12 @@ No TIC-80 binary is needed. From the project folder:
 
 ```
 ticpak check -v                          # the built dist/<name>.tic, full report
-ticpak-check main.lua dist/<name>.tic    # source header and package in one run
+ticpak check main.lua dist/<name>.tic    # source header and package in one run
 ```
 
 `ticpak check` needs a built cart. If it says the `.tic` is not found, build
-it first ([build.md](build.md)). `ticpak-check` takes any `.tic` or text-cart
-`.lua` files. For a `.lua`, it checks the header and lists the banks its
+it first ([build.md](build.md)). Given files, `ticpak check` checks exactly
+those: any `.tic` or text-cart `.lua` files. For a `.lua`, it checks the header and lists the banks its
 `-- <MAP1>`-style section tags use. Both exit 0 when every check passes and 1
 on any violation. Every build also writes the full report to
 `dist/<name>.txt`.

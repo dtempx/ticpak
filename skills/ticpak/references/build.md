@@ -6,7 +6,7 @@
 
 ## Steps
 
-1. **Check the header first**: `ticpak-check main.lua`. Fill in any field it
+1. **Check the header first**: `ticpak check main.lua`. Fill in any field it
    reports as `MISSING` (see the header rule in [SKILL.md](../SKILL.md)).
 2. **Build.**
 

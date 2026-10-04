@@ -105,7 +105,7 @@ table (`local M = {} ... return M`), and callers bind it with
 
 Check it against the rules above, in this order:
 
-1. `ticpak-check main.lua`: the header is complete.
+1. `ticpak check main.lua`: the header is complete.
 2. Every `require` anywhere in the modules names a module that `main.lua`
    also requires.
 3. No module has a column-0 `-- <` line (`grep -n "^-- <" *.lua`, apart from

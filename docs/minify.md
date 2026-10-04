@@ -255,9 +255,9 @@ define would look as if they were never written.
 
 ```
 ticpak build -f --minify=comments      # bundle, comments out (see below)
-ticpak-minify --cart --mode=max --report=wn.txt dist/wavynavy.lua > wn.lua
-ticpak-minify --mode=max --fragment enemies.lua
-ticpak-minify --cart --mode=max --passes=fold,inline,dce,shake --width=100 dist/wavynavy.lua
+ticpak minify --cart --mode=max --report=wn.txt dist/wavynavy.lua > wn.lua
+ticpak minify --mode=max --fragment enemies.lua
+ticpak minify --cart --mode=max --passes=fold,inline,dce,shake --width=100 dist/wavynavy.lua
 ```
 
 | Option | Meaning |

@@ -22,8 +22,9 @@ assets: 69K (63%)
 
 ## Quick start
 
-You need **Python 3.9+** and the **Pro build of TIC-80** (only Pro reads text
-`.lua` carts; see [The TIC-80 binary](#the-tic-80-binary)).
+You need [uv](#installing-uv) (or Python 3.9+ with pip) and the **Pro build of
+TIC-80** (only Pro reads text `.lua` carts; see
+[The TIC-80 binary](#the-tic-80-binary)).
 
 ```
 uv tool install "ticpak[prompts] @ git+https://github.com/dtempx/ticpak"
@@ -44,13 +45,23 @@ ticpak check         # check the cart already built
 
 ## Installing
 
-ticpak has no required dependencies. Pick whichever installer you already use:
+ticpak has no required dependencies. The recommended way to install it is
+[uv](https://docs.astral.sh/uv/):
+
+```
+uv tool install "ticpak[prompts] @ git+https://github.com/dtempx/ticpak"
+```
+
+uv gives ticpak its own private environment, so it can't clash with other
+Python packages you have installed, and puts one command, `ticpak`, on your
+PATH. Later, `uv tool upgrade ticpak` updates it and `uv tool uninstall ticpak`
+removes it. Other ways in:
 
 | How | Command |
 |---|---|
-| [uv](https://docs.astral.sh/uv/) (recommended) | `uv tool install "ticpak[prompts] @ git+https://github.com/dtempx/ticpak"` |
-| uv, one-off run without installing | `uvx --from git+https://github.com/dtempx/ticpak ticpak build` |
-| pipx | `pipx install "ticpak[prompts] @ git+https://github.com/dtempx/ticpak"` |
+| one-off run, nothing installed | `uvx --from git+https://github.com/dtempx/ticpak ticpak build` |
+| pipx instead of uv | `pipx install "ticpak[prompts] @ git+https://github.com/dtempx/ticpak"` |
+| plain pip | `pip install "ticpak[prompts] @ git+https://github.com/dtempx/ticpak"` |
 | from a clone, editable | `pip install -e ".[prompts]"` |
 | from a clone, no install | `python -m ticpak` |
 
@@ -58,13 +69,43 @@ The `[prompts]` extra adds [questionary](https://github.com/tmbo/questionary)
 for arrow-key menus in interactive mode. Without it you get plain numbered
 questions; everything else is the same.
 
-Installing gives you three commands:
+### Installing uv
 
-| Command | What it is |
+uv is a single program with no prerequisites. It doesn't even need Python
+installed: when no suitable Python is found, it downloads one for ticpak.
+
+**Windows** (PowerShell), either of:
+
+```
+winget install --id=astral-sh.uv -e
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Linux and macOS** (including ARM boards such as a Raspberry Pi):
+
+```
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+(Without curl: `wget -qO- https://astral.sh/uv/install.sh | sh`.)
+
+Then **open a new terminal** so the updated PATH takes effect, and check with
+`uv --version`. If `ticpak` is not found after `uv tool install`, run
+`uv tool update-shell` and open a new terminal again: it adds uv's tool folder
+(`~/.local/bin`, or `%USERPROFILE%\.local\bin` on Windows) to your PATH.
+Other install methods are in [uv's docs](https://docs.astral.sh/uv/getting-started/installation/).
+
+### One command
+
+Everything is a subcommand of `ticpak`:
+
+| Command | What it does |
 |---|---|
-| `ticpak` | the packager: everything on this page |
-| `ticpak-minify` | the Lua 5.3 minifier on its own ([docs/minify.md](docs/minify.md)) |
-| `ticpak-check` | the `.tic` limit and header checker on its own |
+| `ticpak` | interactive: status, or asks how to build |
+| `ticpak build` | build and check the project's package |
+| `ticpak check` | check the project's built package |
+| `ticpak check FILE...` | check any `.tic` or `.lua` files you name |
+| `ticpak minify FILE` | the Lua 5.3 minifier on its own ([docs/minify.md](docs/minify.md)) |
 
 ## What your project looks like
 
@@ -132,13 +173,17 @@ release. `main.lua` and the modules stay your sources.
 
 ```
 ticpak [build | check] [SOURCE] [options]
+ticpak check FILE... [-q]
+ticpak minify [options] FILE
 ```
 
 | Command | What it does | Asks questions? |
 |---|---|---|
 | *(none)* | interactive: shows the status, or asks how to build | yes, needs a terminal |
 | `build` | builds and checks, or does nothing when the cart is up to date | never |
-| `check` | checks the existing `.tic` without building | never |
+| `check` | checks the project's existing `.tic` without building | never |
+| `check FILE...` | checks exactly the files named ([below](#checking-any-file)) | never |
+| `minify FILE` | the minifier on its own ([below](#the-minifier-on-its-own)) | never |
 
 `build` and `check` never wait for input, so they are the forms for scripts,
 CI and AI agents. Anything missing is an error message saying what is needed.
@@ -153,6 +198,7 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 | `-o`, `--out DIR` | output folder, relative to the current folder (default `dist`) |
 | `-n`, `--name NAME` | output name without extension (default: saveid, else title) |
 | `-v`, `--verbose` | also show progress and the check's detail (`check -v`: the full report) |
+| `-q`, `--quiet` | `check FILE...` only: print only violations |
 | `--version` | print the version |
 
 ```
@@ -167,10 +213,43 @@ ticpak check -v                 # ...and the full check report
 ticpak build -n mygame          # dist/mygame.lua + dist/mygame.tic
 ticpak build -o out             # write to ./out instead of ./dist
 ticpak build path/to/main.lua   # a cart elsewhere (or its folder)
+ticpak check main.lua dist/mygame.tic   # check these two files: full report
+ticpak minify --fragment enemies.lua    # one module, minified, to stdout
 ```
 
 `ticpak --help` shows the options and these examples; this page is the full
 reference.
+
+### Checking any file
+
+`ticpak check` on its own (or given a folder) checks the project's built
+`dist/<name>.tic` and prints the summary. Give it files instead and it checks
+exactly those, printing the checker's full report for each:
+
+```
+ticpak check main.lua                    # the source's header, before a build
+ticpak check main.lua dist/mygame.tic    # source and package in one run
+ticpak check -q some/other.tic           # violations only; just the exit code
+```
+
+A `.tic` gets the full check: every section against its size limit, the code
+budget, the banks, the cover screenshot and the header. A text-cart `.lua`
+gets the header check and the banks its `-- <MAP1>`-style section tags use. No
+TIC-80 binary is needed. It exits 1 if any file has a violation.
+
+### The minifier on its own
+
+`ticpak minify FILE` minifies one Lua file or text cart and writes the result
+to stdout. Unlike `build`, it applies every option unless `--mode` says
+otherwise:
+
+```
+ticpak minify --fragment enemies.lua > enemies.min.lua   # one module
+ticpak minify --cart --report=report.txt dist/mygame.lua > small.lua
+```
+
+`ticpak minify --help` lists its options; [docs/minify.md](docs/minify.md) has
+the details.
 
 ### Up to date or not
 
@@ -390,8 +469,8 @@ Or copy `skills/ticpak/` into your agent's skills directory yourself
 | `ticpak/report.py` | the check report in `<name>.txt`, the summary, the `-v` detail |
 | `ticpak/header.py` | the metadata header: the output name, missing tags, filling them in |
 | `ticpak/console.py` | console output and the prompts (questionary or plain) |
-| `ticpak/check.py` | the `.tic` limit and header checker (`ticpak-check`) |
-| `ticpak/minify.py` | the minifier (`ticpak-minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
+| `ticpak/check.py` | the `.tic` limit and header checker (`ticpak check FILE...`) |
+| `ticpak/minify.py` | the minifier (`ticpak minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
 
 `scripts/update_reserved.py` refreshes the minifier's list of TIC-80 API
 names (which `rename` must never take) from a TIC-80 binary.

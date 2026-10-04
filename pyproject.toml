@@ -28,8 +28,6 @@ test = ["lupa>=2"]
 
 [project.scripts]
 ticpak = "ticpak.cli:main"
-ticpak-minify = "ticpak.minify:main"
-ticpak-check = "ticpak.check:main"
 
 [project.urls]
 Homepage = "https://github.com/dtempx/ticpak"

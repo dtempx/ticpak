@@ -40,8 +40,9 @@ no `main.lua` means `init`, no `dist/*.tic` (or sources newer than it) means
 - **Find the tool.** Check that `ticpak --version` works. If it doesn't, use
   `uvx --from git+https://github.com/dtempx/ticpak ticpak ...` for a one-off
   run, or install it with
-  `uv tool install "ticpak @ git+https://github.com/dtempx/ticpak"`.
-  `ticpak-check` comes with it.
+  `uv tool install "ticpak @ git+https://github.com/dtempx/ticpak"`
+  (no uv? see the README's "Installing uv"). It is one command: checking
+  files and minifying are `ticpak check FILE...` and `ticpak minify`.
 - **Run from the folder holding `main.lua`** (ticpak also finds
   `src/main.lua`), or pass the cart's path as the first argument.
 - **The metadata header must be complete.** The comment block at the top of

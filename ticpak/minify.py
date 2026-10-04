@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lua 5.3 minifier for TIC-80 carts -- the minification stage of ticpak.
 
-ticpak's bundle imports it to shrink the amalgamated cart; `ticpak-minify`
+ticpak's bundle imports it to shrink the amalgamated cart; `ticpak minify`
 runs it on its own. (History: it replaced luamin53.py on 2026-10-02 and was
 called ticminify.py until ticpak got its own repo on 2026-10-04.)
 
@@ -2892,9 +2892,27 @@ def minify_cart(text, mode=("comments",), meta_keys=None, **opts):
     return minify_cart_ex(text, mode, meta_keys, **opts).text
 
 
+USAGE = """usage: ticpak minify [options] FILE.lua    (writes to stdout)
+
+  --mode=OPTION,...   comments, rename, constants, whitespace, extra; or max
+                      for all of them (the default)
+  --cart              FILE is a text cart: keep its header and asset sections
+  --fragment          FILE is one module, not a whole program: leave globals alone
+  --report=FILE       write the pass report to FILE
+  --passes=a,b,...    run only these internal passes (fold, inline, dce, shake,
+                      rename, sugar, alias, merge), to bisect a problem
+  --width=N           line width of the layout (default 120)
+  --inline=all        inline every constant, ignoring the size check
+
+full documentation: docs/minify.md"""
+
+
 def main(argv=None):
-    """`ticpak-minify`: minify one Lua file or text cart to stdout."""
+    """`ticpak minify`: minify one Lua file or text cart to stdout."""
     argv = sys.argv[1:] if argv is None else argv
+    if not argv or "-h" in argv or "--help" in argv:
+        print(USAGE)
+        sys.exit(0 if argv else 2)
     mode, cart, opts = "max", False, {}
     report_path = None
     args = [a for a in argv if not a.startswith("--")]
@@ -2917,11 +2935,9 @@ def main(argv=None):
         elif a.startswith("--report="):
             report_path = a.split("=", 1)[1]
         else:
-            sys.exit(f"minify: unknown option {a}\n{__doc__}")
+            sys.exit(f"minify: unknown option {a}\n\n{USAGE}")
     if len(args) != 1:
-        sys.exit("usage: ticpak-minify [--cart] [--mode=OPTION,...|max] [--fragment]"
-                 " [--passes=a,b] [--width=N] [--inline=all] [--report=FILE] FILE.lua"
-                 "  (writes to stdout)")
+        sys.exit(USAGE)
     try:
         chosen = parse_options(mode)
     except ValueError as e:
@@ -2939,7 +2955,3 @@ def main(argv=None):
     sys.stdout.write(r.text)
     if report_path and r.report is not None:
         open(report_path, "w", encoding="utf-8").write(r.report.text())
-
-
-if __name__ == "__main__":
-    main()

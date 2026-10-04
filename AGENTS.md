@@ -37,10 +37,10 @@ There is no linter or pytest config; tests are plain scripts using stdlib `unitt
 
 1. `bundle.py` — `find_cart` → `Target` (all output paths), `freshness` (timestamp-only up-to-date check), `assemble` (header + stub + one `package.preload["mod"] = function(...) ... end` per required module; asset chunks set aside; `origin` maps each bundle line to `file:line`), then `minify.minify_cart_ex`, then writes `<name>.lua` and, for any option past `comments`, the `.minify.txt`/`.minify.json` decode maps. Also guards against unminified comment lines starting `-- <`, which TIC-80 reads as the start of asset sections.
 2. `run.py` — finds TIC-80 Pro, boots the bundle headless from an isolated folder, saves `<name>.tic`.
-3. `report.py` + `check.py` — parse the `.tic` chunks, check code budget/banks/cover/header, write `<name>.txt` and the summary. `check.py` is also the standalone `ticpak-check`.
+3. `report.py` + `check.py` — parse the `.tic` chunks, check code budget/banks/cover/header, write `<name>.txt` and the summary. `check.py` also serves `ticpak check FILE...`.
 4. `header.py` — metadata tags, output name (`saveid` → `title` → slug), filling in missing tags.
 
-### The minifier (`minify.py`, ~3k lines, also standalone `ticpak-minify`)
+### The minifier (`minify.py`, ~3k lines, also `ticpak minify`)
 
 Self-contained: lexer → AST parser → tree passes → emitter → layout. Key ideas that span the file:
 

@@ -22,6 +22,7 @@ from . import __version__, console
 from . import minify as minifier
 from .bundle import (Target, bundle, find_cart, freshness, stub_requires,
                      unminified_size)
+from .check import check_lua, check_tic
 from .console import FlatStdout, Prompts, fwd, has_terminal, show
 from .header import cart_code, ensure_header, package_name, slug
 from .report import check_summary, size_summary
@@ -39,11 +40,13 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak build path/to/main.lua   a cart elsewhere
   ticpak build -n mygame          override the output name
   ticpak build -o out             write to out/ instead of dist/
+  ticpak check main.lua dist/x.tic   check exactly these files: full report
+  ticpak minify enemies.lua       the minifier on its own (ticpak minify --help)
 
 full documentation: README.md
 """
 
-COMMANDS = ("build", "check")
+COMMANDS = ("build", "check")       # `minify` is dispatched before argparse
 
 
 def minify_arg(text):
@@ -98,22 +101,27 @@ def parse_args(argv):
     """(command or None, argparse namespace, parser) for a command line."""
     ap = argparse.ArgumentParser(
         prog="ticpak",
-        usage="%(prog)s [build | check] [SOURCE] [options]",
+        usage="%(prog)s [build | check | minify] [SOURCE] [options]",
         description="Package a TIC-80 cart for distribution: inline its modules,"
                     " minify, boot-test headless, save the .tic, and check it."
                     " With no command it asks what to do (at a terminal);"
                     " `build` (skips an up-to-date package unless --force) and"
-                    " `check` run without prompts, for automation.",
+                    " `check` run without prompts, for automation. `check FILE...`"
+                    " checks the named .tic/.lua files instead of the project's"
+                    " package; `minify` runs the minifier on its own.",
         epilog=EXAMPLES, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"ticpak {__version__}")
-    ap.add_argument("source", nargs="?", metavar="SOURCE",
+    ap.add_argument("sources", nargs="*", metavar="SOURCE",
                     help="the cart (main.lua) or a directory holding it"
-                         " (default: ./main.lua, then ./src/main.lua)")
+                         " (default: ./main.lua, then ./src/main.lua); with"
+                         " `check`, files (.tic/.lua) to check directly")
     ap.add_argument("-f", "--force", action="store_true",
                     help="build: rebuild even if the package is up to date")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="show progress and the check's detail (with `check`:"
                          " the full check report), not just the summary")
+    ap.add_argument("-q", "--quiet", action="store_true",
+                    help="check FILE...: print only violations (exit code 0/1)")
     ap.add_argument("-o", "--out", metavar="DIR",
                     help="output directory (default: ./dist)")
     ap.add_argument("-n", "--name",
@@ -131,16 +139,47 @@ def parse_args(argv):
     args = ap.parse_args(argv[1:] if command else argv)
     if command == "check" and args.force:
         ap.error("--force applies to build, not check")
+    # `check` given files checks exactly those (a directory, or nothing, means
+    # the project's built package); everywhere else SOURCE is one cart.
+    args.files = []
+    if command == "check" and any(os.path.isfile(s) or s.lower().endswith(".tic")
+                                  for s in args.sources):
+        args.files = args.sources
+        if args.out or args.name or args.minify:
+            ap.error("check FILE...: -o, -n and -m apply to the project's package")
+    elif len(args.sources) > 1:
+        ap.error("give one SOURCE: the cart or the directory holding it")
+    elif args.quiet:
+        ap.error("--quiet applies to check FILE...")
+    args.source = args.sources[0] if args.sources and not args.files else None
     return command, args, ap
 
 
+def check_files(paths, quiet):
+    """`check FILE...`: the checker's report on each .tic / .lua; exits 1 on
+    any violation."""
+    ok = True
+    for path in paths:
+        if not os.path.isfile(path):
+            sys.exit(f"ticpak: {path} not found")
+        check = check_lua if path.lower().endswith(".lua") else check_tic
+        ok = check(path, quiet=quiet) and ok
+    sys.exit(0 if ok else 1)
+
+
 def main(argv=None):
-    command, args, ap = parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "minify":    # its own options: ticpak minify --help
+        minifier.main(argv[1:])
+        return
+    command, args, ap = parse_args(argv)
     console.VERBOSE = args.verbose
     # From here on the console reads like the <name>.txt report: flush left.
     # (After parse_args, so --help keeps its indented layout.)
     if not isinstance(sys.stdout, FlatStdout):
         sys.stdout = FlatStdout(sys.stdout)
+    if args.files:
+        check_files(args.files, args.quiet)
     interactive = command is None
     if interactive and not has_terminal():
         print("ticpak: no terminal to prompt on. For automated runs, give a command:\n"
