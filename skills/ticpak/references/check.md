@@ -16,7 +16,10 @@ both); for anywhere else, give the same `-o` the build used. If it says the `.ti
 the banks its `-- <MAP1>`-style section tags use. Both exit 0 when every check
 passes and 1 on any violation. To keep the full report in a file, add `-r`
 (`ticpak check -r` writes `<name>.ticpak.txt` beside the `.tic`; `-r PATH`
-writes it there). `-r` doesn't apply to `check FILE...`.
+writes it there). `-r` doesn't apply to `check FILE...`. Without `-r`, a
+`hint: more info in <path>` line names a report an earlier build left beside
+the `.tic` (a folder build always writes one); read it for the savings by
+file and option, which `check` alone doesn't show.
 
 ## What the report lines mean
 

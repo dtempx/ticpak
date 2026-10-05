@@ -168,6 +168,23 @@ def build_command(source, minify, name, default_name, out, report=None, force=Fa
         parts.append("-r")
     elif report:
         parts.append("--report=" + report)
+    return join_command(parts)
+
+
+def check_command(source, name, default_name, out):
+    """The `ticpak check` command line for what build_command builds. A
+    check finds DEFAULT_DIR's build by itself, so -o only for another."""
+    parts = ["ticpak", "check"]
+    if source:
+        parts.append(source)
+    if name != default_name and (out is None or out_kind(out) == "dir"):
+        parts += ["-n", name]
+    if out is not None and out != DEFAULT_DIR:
+        parts += ["-o", out]
+    return join_command(parts)
+
+
+def join_command(parts):
     return " ".join(f'"{p}"' if any(c.isspace() for c in p) else p for p in parts)
 
 
@@ -378,7 +395,8 @@ def main(argv=None):
     if interactive:
         if os.path.isfile(t.output):    # rebuild it as it was built
             force_hint(build_command(args.source, last, t.name, package_name(meta), out,
-                                     force=True))
+                                     force=True),
+                       check_command(args.source, t.name, package_name(meta), out))
             return
         print("hint: answer the questions below to build it (Ctrl+C to cancel)")
         args.minify, name, out = ask_build_settings(Prompts(), args.minify, t.name, out)
@@ -392,15 +410,18 @@ def main(argv=None):
         if not os.path.isfile(t.output):
             sys.exit(f"ticpak: {show(t.output)} not found - build it first:"
                      " ticpak bundle" + (f" -o {args.out}" if args.out else ""))
-        if t.tic:
-            check_summary(t, unminified_size(t), full=True)
-        else:                           # a lone bundle: the text-cart check
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                ok = check_lua(t.lua)
-            print(buf.getvalue(), end="")
-            write_report(t, buf.getvalue())
-            sys.exit(0 if ok else 1)
+        try:                            # the hint after violations (exit 1) too
+            if t.tic:
+                check_summary(t, unminified_size(t), full=True)
+            else:                       # a lone bundle: the text-cart check
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ok = check_lua(t.lua)
+                print(buf.getvalue(), end="")
+                write_report(t, buf.getvalue())
+                sys.exit(0 if ok else 1)
+        finally:
+            report_hint(t)
         return
     if not rerun:
         options_note(last, args.minify, fresh and not args.force)
@@ -412,7 +433,8 @@ def main(argv=None):
         elif t.tic:
             print("\n".join(size_summary(t.tic, unminified_size(t))))
         force_hint(build_command(args.source, args.minify, t.name, package_name(meta),
-                                 args.out, args.report, force=True))
+                                 args.out, args.report, force=True),
+                   check_command(args.source, t.name, package_name(meta), args.out))
         return
     # Just the .lua: boot it and check a .tic made from it all the same in
     # tmp, then drop the .tic.
@@ -440,8 +462,20 @@ def build_plan(minify):
             + [("boot", BOOT_SECONDS), ("save", 1.0)])
 
 
-def force_hint(command):
+def force_hint(command, check=None):
+    """The command that rebuilds an up-to-date output, and for a cart the
+    one that checks it (check), highlighted."""
     print("hint: " + highlight(command) + " to force rebuild")
+    if check:
+        print("hint: " + highlight(check) + " to check bundle info")
+
+
+def report_hint(t):
+    """After a check that wrote no report: point at the one a build left
+    beside the output (<name>.ticpak.txt), if there is one."""
+    path = os.path.join(t.dist_dir, t.name + ".ticpak.txt")
+    if t.txt is None and os.path.isfile(path):
+        print("hint: more info in " + highlight(fwd(path)))
 
 
 def options_note(last, minify, skipped):

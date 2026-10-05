@@ -1140,9 +1140,10 @@ class TestSavings(unittest.TestCase):
                                  .encode("utf-8")))
             table = report.savings_table(groups, options)
             self.assertRegex(table[1], r"^file +source +comments +whitespace +constants"
-                                       r" +extra +rename +after$")
-            self.assertRegex(table[-1], rf"^total +{raw:,} ")
-            self.assertEqual([r.split()[0] for r in table[2:]],
+                                       r" +extra +rename +total +reduction$")
+            self.assertRegex(table[-2], rf"^total +{raw:,} .* \d+%$")
+            self.assertEqual(table[-1], "")         # a blank line ends it
+            self.assertEqual([r.split()[0] for r in table[2:-1]],
                              list(groups)[:-1] + ["(added", "total"])
             # comments only: its column and whitespace's
             t = bundle.Target(PROJECT_MAIN, "game", os.path.join(tmp, "y.lua"))
@@ -1150,7 +1151,7 @@ class TestSavings(unittest.TestCase):
                 bundle.bundle(t, M.parse_options("comments"))
             groups, _, options = t.savings
             table = report.savings_table(groups, options)
-            self.assertRegex(table[1], r"^file +source +comments +whitespace +after$")
+            self.assertRegex(table[1], r"^file +source +comments +whitespace +total +reduction$")
             t = bundle.Target(PROJECT_MAIN, "game", os.path.join(tmp, "z.lua"))
             with contextlib.redirect_stdout(io.StringIO()):
                 bundle.bundle(t, frozenset())
@@ -1164,7 +1165,8 @@ class TestSavings(unittest.TestCase):
         table = report.savings_table(groups, M.ALL_OPTIONS)
         self.assertTrue(table[3].endswith("(removed: unused)"))
         self.assertFalse(table[2].endswith("(removed: unused)"))
-        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +1,024$")
+        self.assertRegex(table[3], r" 100%  \(removed: unused\)$")
+        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +1,024 +67%$")
 
 
 class TestBundle(unittest.TestCase):

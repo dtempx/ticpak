@@ -17,7 +17,7 @@ cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
 code limit: 41K / 64K (64% used, 36% free)
-original code size: 151K (73% reduction; minify: all)
+original code size: 151K (73% reduction with minify: all)
 ```
 
 ## Quick start
@@ -388,7 +388,7 @@ with a folder, the `.tic`, with the `.lua` and the report beside it) is newer
 than `main.lua` and every module. `bundle` skips an up-to-date cart, so running it
 on every save is cheap; it still prints the summary, then a hint that repeats
 your command with `-f`, such as `hint: ticpak bundle -f -m -o dist/ to force
-rebuild`. Only file timestamps count, so after changing `-m` or upgrading
+rebuild`, and one with the matching `ticpak check`. Only file timestamps count, so after changing `-m` or upgrading
 ticpak, use `bundle -f`. When your `-m` differs from the one the output was
 built with (read from its `-- ticpak:` line), `bundle` says so, whether it
 rebuilds or not:
@@ -405,7 +405,7 @@ cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
 code limit: 41K / 64K (64% used, 36% free)
-original code size: 151K (73% reduction; minify: all)
+original code size: 151K (73% reduction with minify: all)
 ```
 
 - **cart size** is the `.tic` file's size.
@@ -416,7 +416,7 @@ original code size: 151K (73% reduction; minify: all)
   editor's 64K. Past it the line adds `- over the free editor's limit, fine
   on PRO (up to 512K)`.
 - **original code size** is the code's size before minification and the
-  saving, with the options used (`(73% reduction; minify: all)`), or `not
+  saving, with the options used (`(73% reduction with minify: all)`), or `not
   minified`. The options come from the cart's `-- ticpak:` line, so `check`
   shows them too. A cart built before ticpak 0.3.4 has no such line, and
   then only the size and the saving show.
@@ -446,18 +446,19 @@ each source file:
 
 ```
 minify: bytes saved, by file and option (negative: the option added bytes)
-file                    source  comments  whitespace  constants  extra  rename   after
-main.lua                 3,752     2,924          87         10      0      53     678
-constants.lua            9,104     6,216       1,347      1,468      0      27      46
-board.lua               12,241     6,357       1,206        478    141     375   3,684
+file                    source  comments  whitespace  constants  extra  rename   total  reduction
+main.lua                 3,752     2,924          87         10      0      53     678        82%
+constants.lua            9,104     6,216       1,347      1,468      0      27      46        99%
+board.lua               12,241     6,357       1,206        478    141     375   3,684        70%
 ...
-(added by ticpak)          974         0          75          0   -153      30   1,022
-total                   95,731    44,763      10,326      5,039    866   5,607  29,130
+(added by ticpak)          974         0          75          0   -153      30   1,022        -5%
+total                   95,731    44,763      10,326      5,039    866   5,607  29,130        70%
 ```
 
-- **source** and **after** are each file's code in the bundle, before and
-  after minifying, in bytes of UTF-8. Each row's options add up to the
-  difference. The total row's `source` is the summary's `unminified` size.
+- **source** and **total** are each file's code in the bundle, before and
+  after minifying, in bytes of UTF-8, and **reduction** is the share
+  minifying took off. Each row's options add up to the difference. The
+  total row's `source` is the summary's original code size.
   `main.lua`'s row counts its metadata header but not its asset sections.
 - There is a column for each option you chose, plus **whitespace**, because
   every option removes some: `comments` drops the lines that held only a
@@ -526,10 +527,11 @@ hint: ticpak bundle -m=comments,whitespace -n mygame-lite -o dist/ to build with
 If the default output (`<name>.tic` beside `main.lua`, or `-o`'s) already
 exists, it asks nothing. It prints the status lines and a hint with the
 command that rebuilds it as it was built, `-m` included (from its
-`-- ticpak:` line), and exits:
+`-- ticpak:` line), and the one that checks it, and exits:
 
 ```
 hint: ticpak bundle -f -m -o dist/ to force rebuild
+hint: ticpak check to check bundle info
 ```
 
 With no terminal (piped input, CI) it doesn't guess. It tells you to use
@@ -724,7 +726,9 @@ exports: load it in TIC-80 and run `export html <name>` or
 A folder build (`-o dist/`) always writes the full report,
 `<name>.ticpak.txt`, in the folder. Otherwise `bundle` and `check` write
 nothing but the cart unless you ask: `-r` (or `--report`) also writes the
-full report. Either way a `report:` line names the file:
+full report. Either way a `report:` line names the file. A `check` without
+`-r` that finds a report a build left beside the output points at it
+(`hint: more info in dist/<name>.ticpak.txt`).
 
 | Form | Writes |
 |---|---|

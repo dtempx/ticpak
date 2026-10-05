@@ -43,7 +43,8 @@ def kb(n):
 def savings_table(groups, options):
     """The minify savings, as lines: per source file (groups: {file: {key:
     bytes}}, Savings.group's) and in total, the code's source size, what
-    each option took off it, and the code after, in bytes. A column for
+    each option took off it, and the code after (total), in bytes, then
+    the reduction as a percentage; a blank line ends it. A column for
     each of options, whitespace (every option relexes the code), and any
     other option that changed something."""
     total = {}
@@ -54,8 +55,8 @@ def savings_table(groups, options):
             if k in options or k == "whitespace" or total.get(k)]
     rows = list(groups.items()) + ([("total", total)] if len(groups) > 1 else [])
     keys = ["source"] + cols + ["final"]
-    heads = ["source"] + cols + ["after"]
-    cells = [[f"{g.get(k, 0):,}" for k in keys] for _, g in rows]
+    heads = ["source"] + cols + ["total", "reduction"]
+    cells = [[f"{g.get(k, 0):,}" for k in keys] + [reduction(g)] for _, g in rows]
     w = max(len(f) for f, _ in rows)
     ws = [max([len(h)] + [len(c[i]) for c in cells]) for i, h in enumerate(heads)]
     out = ["minify: bytes saved, by file and option (negative: the option added bytes)",
@@ -65,7 +66,13 @@ def savings_table(groups, options):
         if g.get("source") and not g.get("final") and f != "total":
             line += "  (removed: unused)"
         out.append(line)
-    return out
+    return out + [""]
+
+
+def reduction(g):
+    """A savings row's source-to-final reduction, as a percentage."""
+    source = g.get("source", 0)
+    return f"{100 * (1 - g.get('final', 0) / source):.0f}%" if source else "-"
 
 
 def made_of_lines(sv):
@@ -123,8 +130,8 @@ def size_summary(tic, unminified=None):
             lines.append("not minified")
         elif unminified is not None:
             lines.append(f"original code size: {kb(unminified)}"
-                         f" ({100 * (1 - code / unminified):.0f}% reduction;"
-                         f" minify: {minify_label(options)})")
+                         f" ({100 * (1 - code / unminified):.0f}% reduction"
+                         f" with minify: {minify_label(options)})")
         else:
             lines.append(f"minify: {minify_label(options)}")
     elif unminified is not None and unminified - code > 16:

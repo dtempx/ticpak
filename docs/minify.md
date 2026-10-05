@@ -331,7 +331,7 @@ Options move bytes as well as remove them: an inlined constant's bytes go to
 the line that reads it, and an alias's `local` declaration to the line it is
 declared on. So one line's (or file's) saving for an option can be negative.
 Every line still balances: `before - after` is the sum of its options'
-savings. A module that shake removed has an `after` of 0.
+savings. A module that shake removed has a `total` of 0 in ticpak's table.
 
 What the code is made of splits the output into strings, numbers, keywords,
 operators, table field and method names, TIC-80 and Lua names, names never

@@ -71,7 +71,7 @@ can't be a `.tic`.
    code: 41K (37%)
    assets: 69K (63%)
    code limit: 41K / 64K (64% used, 36% free)
-   original code size: 151K (73% reduction; minify: all)
+   original code size: 151K (73% reduction with minify: all)
    ```
 
    Exit status 1 means a limit or header violation, printed above the
@@ -84,13 +84,14 @@ can't be a `.tic`.
 
    ```
    minify: bytes saved, by file and option (negative: the option added bytes)
-   file                    source  comments  whitespace  constants  extra  rename   after
-   board.lua               12,241     6,357       1,206        478    141     375   3,684
+   file                    source  comments  whitespace  constants  extra  rename   total  reduction
+   board.lua               12,241     6,357       1,206        478    141     375   3,684        70%
    ...
-   total                   95,731    44,763      10,326      5,039    866   5,607  29,130
+   total                   95,731    44,763      10,326      5,039    866   5,607  29,130        70%
    ```
 
-   Point to the biggest `after` files. What the code is made of follows,
+   Point to the biggest `total` files (bytes after minifying), and to any
+   with a low `reduction`. What the code is made of follows,
    then the biggest names never renamed: function names and globals, which
    you can shorten by hand. A negative entry is normal. An inlined constant's
    bytes move to the file that reads it, and the `(added by ticpak)` row
