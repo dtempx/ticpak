@@ -16,7 +16,7 @@ mygame/
   main.lua        the cart: metadata header, entry stub, asset sections
   game.lua        modules, beside the cart...
   state/play.lua  ...or in subfolders: require "state.play"
-  dist/           ticpak's output: add it to .gitignore
+  <name>.tic      ticpak's output (dist/ with -o dist/): add both to .gitignore
 ```
 
 `main.lua` has three parts, in this order:
@@ -83,7 +83,7 @@ function TIC() game_update() game_draw() end
 3. Write that module, defining what the stub calls. For example, `game.lua`
    with `game_init`, `game_update` and `game_draw`, where `game_draw` calls
    `cls()` and prints the title.
-4. Add `dist/` to `.gitignore`.
+4. Add `*.tic` and `dist/` to `.gitignore`.
 5. Run `ticpak build -f` to prove the bundle boots on its own (see
    [build.md](build.md)), and tell the user how to run it while developing.
 

@@ -3,16 +3,18 @@
 No TIC-80 binary is needed. From the project folder:
 
 ```
-ticpak check --verbose                   # the built dist/<name>.tic, full report
-ticpak check main.lua dist/<name>.tic    # source header and package in one run
+ticpak check --verbose                   # the built <name>.tic beside main.lua, full report
+ticpak check -o dist/ --verbose          # a folder build's dist/<name>.tic instead
+ticpak check main.lua <name>.tic         # source header and package in one run
 ```
 
-`ticpak check` needs a built cart. If it says the `.tic` is not found, build
-it first ([build.md](build.md)). Given files, `ticpak check` checks exactly
-those: any `.tic` or text-cart `.lua` files. For a `.lua`, it checks the header and lists the banks its
-`-- <MAP1>`-style section tags use. Both exit 0 when every check passes and 1
-on any violation. Every build also writes the full report to
-`dist/<name>.txt`.
+`ticpak check` needs a built cart, at the place the build put it: give the
+same `-o` the build used. If it says the `.tic` is not found, build it first
+([build.md](build.md)). Given files, `ticpak check` checks exactly those: any
+`.tic` or text-cart `.lua` files. For a `.lua`, it checks the header and lists
+the banks its `-- <MAP1>`-style section tags use. Both exit 0 when every check
+passes and 1 on any violation. A folder build (`-o dist/`) also writes the
+full report to `dist/<name>.txt`.
 
 ## What the report lines mean
 

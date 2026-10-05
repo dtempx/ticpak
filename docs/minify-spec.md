@@ -66,12 +66,15 @@ debuggable: function names survive, and each function starts on its own line.
   Max mode also returns a report (R10f) and maps (R10g) through a
   `minify.Result` object, which `minify_cart_ex()` exposes. Existing callers
   keep getting a `str`.
-- **I5. Outputs written by `ticpak`** in max mode:
-  - `dist/<game>.lua` and `dist/<game>.tic`, as today;
+- **I5. Outputs written by `ticpak`** in max mode, for a folder build
+  (`-o dist/`; a `.tic` or `.lua` build on its own writes just that file, no
+  report or maps):
+  - `dist/<game>.lua` and `dist/<game>.tic`;
   - `dist/<game>.minify.txt`, the report;
   - `dist/<game>.minify.json`, the rename map and line map.
 
-  All of them are git-ignored build artifacts.
+  All of them are git-ignored build artifacts. Below, `dist/` stands for the
+  folder `-o` names.
 
 ## 4. Definitions
 

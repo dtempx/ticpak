@@ -7,7 +7,8 @@ documentation: README.md. This file is the console front end - the command
 line, the interactive questions, and the dispatch to the modules that do the
 work:
 
-  bundle.py   find the cart, inline its modules, minify, write <name>.lua
+  bundle.py   find the cart, the outputs (-o), inline its modules, minify,
+              write <name>.lua
   run.py      find TIC-80, boot the bundle headless, save <name>.tic
   report.py   check the .tic (check.py), write <name>.txt, the summary
   header.py   the metadata header: output name, missing tags, filling in
@@ -16,21 +17,23 @@ work:
 """
 import argparse
 import os
+import shutil
 import sys
+import tempfile
 
 from . import __version__, console
 from . import minify as minifier
-from .bundle import (Target, bundle, find_cart, freshness, stub_requires,
-                     unminified_size)
+from .bundle import (Target, bundle, find_cart, freshness, is_cart, minify_module,
+                     out_kind, save_bundle, stub_requires, unminified_size)
 from .check import check_lua, check_tic
 from .console import FlatStdout, Prompts, fwd, has_terminal, show
 from .header import cart_code, ensure_header, package_name, slug
-from .report import check_summary, size_summary
+from .report import check_summary, kb, size_summary
 from .run import verify
 
 EXAMPLES = """examples (run from the port's directory, the one holding main.lua):
   ticpak                          interactive: status, or asks to build
-  ticpak build                    build + check if out of date
+  ticpak build                    build + check if out of date: <name>.tic beside main.lua
   ticpak build -f                 build + check regardless (--force)
   ticpak build --verbose          ...showing progress and the check's detail
   ticpak check                    check the existing .tic: summary only
@@ -38,8 +41,11 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak build -f -m              every minify option (smallest cart)
   ticpak build -f -m=comments,whitespace   just those minify options
   ticpak build path/to/main.lua   a cart elsewhere
-  ticpak build -n mygame          override the output name
-  ticpak build -o out             write to out/ instead of dist/
+  ticpak build -n mygame          override the output name: mygame.tic
+  ticpak build -o mygame.tic      just this .tic
+  ticpak build -o mygame.lua      just the bundle (still boot-tested and checked)
+  ticpak build -o dist/           dist/<name>.tic, .lua (bundle), .txt (report)
+  ticpak build enemies.lua -m     one module on its own -> enemies.min.lua
   ticpak check main.lua dist/x.tic   check exactly these files: full report
   ticpak minify enemies.lua       the minifier on its own (ticpak minify --help)
 
@@ -68,16 +74,9 @@ def minify_arg(text):
     return minifier.parse_options(items)
 
 
-def ask_build_settings(ui, minify, name, out_dir):
-    """Interactive first build: output name, minification (all options,
-    none, or the individual options as checkboxes), output folder. The
-    arguments are the defaults; returns (minify, name, out_dir)."""
-    while True:
-        name = slug(ui.text("Output name (no extension):", name))
-        if name:
-            break
-        print("  the name needs at least one letter or digit")
-
+def ask_minify(ui, minify):
+    """Minification: all options, none, or the individual options as
+    checkboxes. minify is the default; returns the chosen options."""
     presets = {"all": minifier.ALL_OPTIONS, "none": frozenset()}
     current = next((k for k, v in presets.items() if v == minify), "pick")
     choice = ui.select("Minification:", [
@@ -89,15 +88,37 @@ def ask_build_settings(ui, minify, name, out_dir):
         picked = ui.checkbox("Minify options (space toggles, enter accepts):",
                              [(o, f"{o:<11} {minifier.OPTION_HELP[o]}")
                               for o in minifier.OPTIONS], checked=minify)
-        minify = minifier.parse_options(picked)
-    else:
-        minify = presets[choice]
-
-    out_dir = ui.text("Output folder:", out_dir) or out_dir
-    return minify, name, out_dir
+        return minifier.parse_options(picked)
+    return presets[choice]
 
 
-def build_command(source, minify, name, default_name, out_dir):
+def ask_build_settings(ui, minify, name, out):
+    """Interactive first build: output name, minification, and the output:
+    the .tic alone beside main.lua, or a folder (asked for, default dist/)
+    holding the .tic, the .lua bundle and the .txt report. The arguments are
+    the defaults (out: None, a folder, or a file -o, which leaves only the
+    minification to ask); returns (minify, name, out)."""
+    if out is not None and out_kind(out) != "dir":
+        return ask_minify(ui, minify), name, out
+    while True:
+        name = slug(ui.text("Output name (no extension):", name))
+        if name:
+            break
+        print("  the name needs at least one letter or digit")
+    minify = ask_minify(ui, minify)
+    where = ui.select("Output:", [
+        ("tic", f"{name}.tic only, beside main.lua"),
+        ("dir", f"a folder: {name}.tic, {name}.lua (the bundle), {name}.txt (the check report)"),
+    ], default="tic" if out is None else "dir")
+    if where == "tic":
+        return minify, name, None
+    out = ui.text("Output folder:", out or "dist/") or out or "dist/"
+    if out_kind(out) != "dir":          # `x.lua` typed as a folder name
+        out += "/"
+    return minify, name, out
+
+
+def build_command(source, minify, name, default_name, out):
     """The `ticpak build` command line that repeats an interactive build's
     answers, leaving out anything that is already the default."""
     parts = ["ticpak", "build"]
@@ -107,10 +128,10 @@ def build_command(source, minify, name, default_name, out_dir):
         parts.append("-m")
     elif minify:
         parts.append("-m=" + ",".join(o for o in minifier.OPTIONS if o in minify))
-    if name != default_name:
+    if name != default_name and (out is None or out_kind(out) == "dir"):
         parts += ["-n", name]
-    if out_dir != "dist":
-        parts += ["-o", out_dir]
+    if out is not None:
+        parts += ["-o", out]
     return " ".join(f'"{p}"' if any(c.isspace() for c in p) else p for p in parts)
 
 
@@ -130,17 +151,24 @@ def parse_args(argv):
     ap.add_argument("-v", "--version", action="version", version=f"ticpak {__version__}")
     ap.add_argument("sources", nargs="*", metavar="SOURCE",
                     help="the cart (main.lua) or a directory holding it"
-                         " (default: ./main.lua, then ./src/main.lua); with"
-                         " `check`, files (.tic/.lua) to check directly")
+                         " (default: ./main.lua, then ./src/main.lua), or a"
+                         " module .lua to minify on its own; with `check`,"
+                         " files (.tic/.lua) to check directly")
     ap.add_argument("-f", "--force", action="store_true",
                     help="build: rebuild even if the package is up to date")
     ap.add_argument("-q", "--quiet", action="store_true",
                     help="check FILE...: print only violations (exit code 0/1)")
-    ap.add_argument("-o", "--out", metavar="DIR",
-                    help="output directory (default: ./dist)")
+    ap.add_argument("-o", "--out", metavar="PATH",
+                    help="what to write: NAME.tic (just the cart), NAME.lua (just"
+                         " the bundle), or a folder (DIR/, or any name without"
+                         " those extensions: the .tic, the .lua bundle and the"
+                         " .txt check report). Default: <name>.tic beside"
+                         " main.lua; for a module on its own, <module>.min.lua"
+                         " beside it")
     ap.add_argument("-n", "--name",
                     help="output file name, without extension (default: the"
-                         " header's saveid, else its title)")
+                         " header's saveid, else its title); not with -o FILE,"
+                         " which names the file itself")
     ap.add_argument("-m", "--minify", metavar="OPTION,...", type=minify_arg, nargs="?",
                     const=minifier.ALL_OPTIONS, default=frozenset(),
                     help="minify the bundle: --minify alone applies every"
@@ -169,6 +197,9 @@ def parse_args(argv):
         ap.error("give one SOURCE: the cart or the directory holding it")
     elif args.quiet:
         ap.error("--quiet applies to check FILE...")
+    if args.name and args.out and out_kind(args.out) != "dir":
+        ap.error(f"-o {args.out} names the output file itself - drop -n,"
+                 " or give -o a folder")
     args.source = args.sources[0] if args.sources and not args.files else None
     return command, args, ap
 
@@ -215,54 +246,128 @@ def main(argv=None):
               " ticpak [build | check] path/to/main.lua\n"
               "Specify --help for more info.")
         sys.exit(2)
+    if not is_cart(cart):
+        build_module(command, args, cart, interactive)
+        return
     n = len(stub_requires(cart_code(cart))[0])
     print(f"source: {fwd(cart)} ({n} module{'s' if n != 1 else ''})")
 
     meta = ensure_header(cart, interactive)
     name = slug(args.name) if args.name else package_name(meta)
-    if not name and not interactive:
-        sys.exit("ticpak: no usable output name - pass --name")
-    out_dir = args.out or "dist"
-    t = Target(cart, name or "game", out_dir)
+    if not name and not interactive and (args.out is None or out_kind(args.out) == "dir"):
+        sys.exit("ticpak: no usable output name - pass --name, or -o NAME.tic")
+    out = args.out
+    t = Target(cart, name or "game", out)
+    guard_sources(t)
 
     fresh, rerun = False, None
-    if os.path.isfile(t.tic):
+    if os.path.isfile(t.output):
         fresh, status = freshness(t)
         print(status)
     else:
-        print(f"cart: {fwd(t.tic)} (not built yet)")
+        print(f"cart: {fwd(t.output)} (not built yet)")
 
     if interactive:
-        if os.path.isfile(t.tic):
+        if os.path.isfile(t.output):
             print("hint: ticpak build -f to force rebuild")
             return
         print("hint: answer the questions below to build it (Ctrl+C to cancel)")
-        args.minify, name, out_dir = ask_build_settings(
-            Prompts(), args.minify, t.name, out_dir)
-        t = Target(cart, name, out_dir)
+        args.minify, name, out = ask_build_settings(Prompts(), args.minify, t.name, out)
+        t = Target(cart, name, out)
+        guard_sources(t)
         command, args.force = "build", True
-        rerun = build_command(args.source, args.minify, name,
-                              package_name(meta), out_dir)
+        rerun = build_command(args.source, args.minify, name, package_name(meta), out)
 
     if command == "check":
-        if not os.path.isfile(t.tic):
-            sys.exit(f"ticpak: {show(t.tic)} not found - build it first:"
-                     " ticpak build")
-        check_summary(t, unminified_size(t), full=True)
+        if not os.path.isfile(t.output):
+            sys.exit(f"ticpak: {show(t.output)} not found - build it first:"
+                     " ticpak build" + (f" -o {args.out}" if args.out else ""))
+        if t.tic:
+            check_summary(t, unminified_size(t), full=True)
+        else:                           # a lone bundle: the text-cart check
+            sys.exit(0 if check_lua(t.lua) else 1)
         return
     if fresh and not args.force:
-        print("\n".join(size_summary(t.tic, unminified_size(t))))
+        if t.tic:
+            print("\n".join(size_summary(t.tic, unminified_size(t))))
         print("hint: ticpak build -f to force rebuild")
         return
     try:
         unminified = bundle(t, minify_options=args.minify)
-        verify(t)
-        check_summary(t, unminified)
+        if t.tic:
+            verify(t)
+            check_summary(t, unminified)
+        else:
+            # Just the .lua: boot it and check a .tic made from it all the
+            # same, then drop the .tic.
+            tmp = tempfile.mkdtemp(prefix="ticpak-check-")
+            try:
+                tic = verify(t, os.path.join(tmp, "check.tic"))
+                save_bundle(t)
+                check_summary(t, unminified, tic=tic)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
     finally:
         # Also after a failed boot or a limit violation: the fix is usually
         # in the code, and the rebuild wants the same settings.
         if rerun:
             print(f"hint: to build with these settings again: {rerun}")
+
+
+def guard_sources(t):
+    """Stop before an output would overwrite the cart or one of its modules."""
+    outputs = {os.path.normcase(p) for p in (t.lua, t.tic, t.txt) if p}
+    names = stub_requires(cart_code(t.cart))[0] if t.kind != "module" else []
+    for src in [t.cart] + [t.module_path(n) for n in names]:
+        if os.path.normcase(os.path.abspath(src)) in outputs:
+            sys.exit(f"ticpak: the output would overwrite {show(src)} - choose"
+                     " another -o")
+
+
+def build_module(command, args, path, interactive):
+    """A .lua with no metadata header or asset sections is a module on its
+    own: minified as a fragment (globals left alone) to <module>.min.lua
+    beside it, or to -o's .lua or folder. No .tic: it is not a cart."""
+    print(f"source: {fwd(path)} (a module on its own: no metadata header)")
+    if command == "check":
+        sys.exit(f"ticpak: {show(path)} is a module, not a cart: there is"
+                 " no package to check (ticpak check FILE checks a file itself)")
+    if args.out and out_kind(args.out) == "tic":
+        sys.exit(f"ticpak: {show(path)} is a module, not a cart, so it can't be"
+                 " saved as a .tic - give -o NAME.lua or a folder")
+    default_name = os.path.splitext(os.path.basename(path))[0] + ".min"
+    name = slug(args.name) if args.name else default_name
+    if args.out and out_kind(args.out) == "lua":
+        lua = args.out
+    else:
+        lua = os.path.join(args.out or os.path.dirname(path), name + ".lua")
+    t = Target(path, name, lua)
+    t.kind = "module"
+    guard_sources(t)
+
+    fresh, rerun = False, None
+    if os.path.isfile(t.lua):
+        fresh, status = freshness(t, module=True)
+        print(status)
+    else:
+        print(f"output: {fwd(t.lua)} (not built yet)")
+    if interactive:
+        if os.path.isfile(t.lua):
+            print("hint: ticpak build -f to force rebuild")
+            return
+        print("hint: answer the question below to build it (Ctrl+C to cancel)")
+        args.minify = ask_minify(Prompts(), args.minify)
+        args.force = True
+        rerun = build_command(args.source, args.minify, name, default_name, args.out)
+    if fresh and not args.force:
+        print("hint: ticpak build -f to force rebuild")
+        return
+    before, after = minify_module(t, args.minify)
+    print(f"size: {kb(after)}")
+    print(f"{kb(before)} unminified ({100 * (1 - after / before):.0f}% reduction)"
+          if args.minify and before else "not minified")
+    if rerun:
+        print(f"hint: to build with these settings again: {rerun}")
 
 
 if __name__ == "__main__":

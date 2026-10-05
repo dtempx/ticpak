@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The check for ticpak: check.py's report on the .tic, written flat to
-<out>/<name>.txt, and the closing size summary on screen.
+<dir>/<name>.txt for a folder output, and the closing size summary on screen.
 """
 import contextlib
 import io
@@ -66,12 +66,14 @@ def size_summary(tic, unminified=None):
     return lines
 
 
-def check_summary(t, unminified=None, write_report=True, full=False):
-    """The check: check.py's full report plus the size summary to t.txt; on
-    screen the summary last, with the report's detail (sizes, anything near
-    (>= 90%) or past a limit, every flagged line) only with --verbose, or the whole
+def check_summary(t, unminified=None, full=False, tic=None):
+    """The check of tic (default t.tic): check.py's full report plus the size
+    summary to t.txt, when the target keeps one (a folder output); on screen
+    the summary last, with the report's detail (sizes, anything near (>= 90%)
+    or past a limit, every flagged line) only with --verbose, or the whole
     report with full (`check --verbose`). Violations always show. Exits 1 on one."""
-    tic = t.tic
+    tic = tic or t.tic
+    write_report = t.txt is not None
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         ok = check_tic(tic)
@@ -94,7 +96,8 @@ def check_summary(t, unminified=None, write_report=True, full=False):
     chunks, _ = parse_tic(data)
     code = sum(size for name, _, size, _ in chunks if name in CODE_CHUNKS)
     total = len(data)
-    detail(f"check:  {show(tic)} {total:,} bytes ({100 * total / TIC_FILE_LIMIT:.0f}%"
+    where = show(tic) if tic == t.tic else "the .tic (not kept)"
+    detail(f"check:  {where} {total:,} bytes ({100 * total / TIC_FILE_LIMIT:.0f}%"
            f" of 256 KB); code {code:,} chars ({100 * code / FREE_LIMIT:.0f}% of the"
            " 64 KB free-editor limit)")
 

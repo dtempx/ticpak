@@ -15,7 +15,10 @@ make_samples.py) and on the ticpak project in project/. Per combination:
   CommandLine        --minify absent = none, bare = all, =a,b = those only;
                  presets and --no-minify rejected; a path after --minify hinted;
                  -m, -o/--out, -f/--force, --verbose, -v/--version; `rebuild`,
-                 `check -f`, --no-check and --output rejected
+                 `check -f`, --no-check, --output and -n with -o FILE rejected
+  Outputs        -o NAME.tic / NAME.lua / folder and the default <name>.tic
+                 beside main.lua; cart vs module; a bad SOURCE; the
+                 interactive output questions and the rerun hint
   Summary        the closing size summary's lines and arithmetic, on a .tic
                  built by hand (no TIC-80 run)
   Structure      output re-lexes and re-parses; metadata header and asset
@@ -325,6 +328,118 @@ class TestCommandLine(unittest.TestCase):
                      ["build", "--output", "x"]):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.parse(*argv)
+
+    def test_name_with_file_out_rejected(self):
+        for out in ("x.tic", "x.lua", "a/X.TIC"):
+            with self.subTest(out=out), self.assertRaises(SystemExit):
+                self.parse("build", "-n", "y", "-o", out)
+        self.assertEqual(self.parse("build", "-n", "y", "-o", "dist")[1].out, "dist")
+
+
+class TestOutputs(unittest.TestCase):
+    """-o: a .tic alone, a .lua alone, or a folder of .tic + .lua + .txt
+    (and maps); no -o is <name>.tic beside main.lua. Interactive questions
+    and the rerun hint for each."""
+
+    MAIN = os.path.join(HERE, "project", "main.lua")
+
+    def test_out_kind(self):
+        for out, kind in (("x.tic", "tic"), ("a/b/X.TIC", "tic"), ("x.lua", "lua"),
+                          ("dist/", "dir"), ("dist", "dir"), ("x.lua/", "dir"),
+                          ("out\\", "dir"), ("build.v2", "dir"), ("x.txt", "dir")):
+            with self.subTest(out=out):
+                self.assertEqual(bundle.out_kind(out), kind)
+
+    def test_targets(self):
+        d = os.path.dirname(self.MAIN)
+        t = bundle.Target(self.MAIN, "game")
+        self.assertEqual((t.tic, t.lua, t.txt, t.map_txt), (os.path.join(d, "game.tic"),
+                                                             None, None, None))
+        t = bundle.Target(self.MAIN, "game", "x/my.tic")
+        self.assertEqual((t.name, t.tic, t.lua, t.txt), ("my", os.path.abspath("x/my.tic"),
+                                                         None, None))
+        t = bundle.Target(self.MAIN, "game", "my.lua")
+        self.assertEqual((t.name, t.lua, t.tic, t.txt, t.output),
+                         ("my", os.path.abspath("my.lua"), None, None, t.lua))
+        t = bundle.Target(self.MAIN, "game", "dist/")
+        base = os.path.join(os.path.abspath("dist"), "game")
+        self.assertEqual((t.lua, t.tic, t.txt, t.map_json, t.output),
+                         (base + ".lua", base + ".tic", base + ".txt",
+                          base + ".minify.json", base + ".tic"))
+
+    def test_is_cart(self):
+        d = os.path.dirname(self.MAIN)
+        self.assertTrue(bundle.is_cart(self.MAIN))
+        self.assertFalse(bundle.is_cart(os.path.join(d, "util.lua")))
+
+    def test_find_cart_errors(self):
+        with self.assertRaises(SystemExit) as e:
+            bundle.find_cart(os.path.join(HERE, "nope.lua"))
+        self.assertIn("not found", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            bundle.find_cart(os.path.join(HERE, "README.md"))
+        self.assertIn("not a .lua file", str(e.exception))
+
+    def test_lone_lua_written_after_boot(self):
+        """bundle() keeps a lone .lua in memory: it is saved once it boots, so
+        a failed boot can't leave a bundle that looks up to date."""
+        tmp = tempfile.mkdtemp(prefix="outputs-")
+        try:
+            t = bundle.Target(self.MAIN, "game", os.path.join(tmp, "x.lua"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                bundle.bundle(t, M.ALL_OPTIONS)
+            self.assertTrue(t.code and not os.listdir(tmp))
+            bundle.save_bundle(t)
+            self.assertEqual(os.listdir(tmp), ["x.lua"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    class UI:
+        """Scripted answers for Prompts: one per question, in order."""
+        def __init__(self, *answers):
+            self.answers, self.asked = list(answers), []
+
+        def _next(self, message, default):
+            """The scripted answer; None takes the default."""
+            self.asked.append(message)
+            a = self.answers.pop(0)
+            return default if a is None else a
+
+        def text(self, message, default=""):
+            return self._next(message, default)
+
+        def select(self, message, choices, default):
+            return self._next(message, default)
+
+        def checkbox(self, message, choices, checked):
+            return self._next(message, checked)
+
+    def test_interactive_tic_default(self):
+        ui = self.UI(None, "all", None)
+        self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", None),
+                         (M.ALL_OPTIONS, "game", None))
+        self.assertEqual(ui.asked[-1], "Output:")
+
+    def test_interactive_folder(self):
+        ui = self.UI("Other Name", "none", "dir", None)
+        self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", None),
+                         (frozenset(), "other-name", "dist/"))
+        ui = self.UI(None, None, None, "x.lua")
+        self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", "out")[2], "x.lua/")
+
+    def test_interactive_file_out_asks_minify_only(self):
+        ui = self.UI("all")
+        self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", "a.tic"),
+                         (M.ALL_OPTIONS, "game", "a.tic"))
+        self.assertEqual(ui.asked, ["Minification:"])
+
+    def test_build_command(self):
+        self.assertEqual(cli.build_command(None, M.ALL_OPTIONS, "g", "g", None),
+                         "ticpak build -m")
+        self.assertEqual(cli.build_command(None, frozenset(), "h", "g", "dist/"),
+                         "ticpak build -n h -o dist/")
+        self.assertEqual(cli.build_command("src", frozenset(), "a", "g", "a.tic"),
+                         "ticpak build src -o a.tic")
 
 
 class TestSummary(unittest.TestCase):

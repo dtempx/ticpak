@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Running TIC-80 for ticpak: find the Pro binary, capture a headless
-run's output, and boot the bundle alone then save <out>/<name>.tic.
+run's output, and boot the bundle alone then save the .tic.
 """
 import os
 import re
@@ -15,6 +15,7 @@ if os.name != "nt":                 # the pty route below is POSIX-only
     import select
 
 from .console import detail, show
+from .header import slug
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -95,13 +96,22 @@ def _run_tty(cmd, cwd, timeout):
     return b"".join(chunks).decode(errors="replace").replace("\r", "")
 
 
-def verify(t):
-    """Boot the bundle t.lua headless on its own, then save t.tic beside it.
-    Returns the .tic's path; exits with TIC-80's output if either step fails."""
+def verify(t, tic=None):
+    """Boot the bundle (t.code, else the file t.lua) headless on its own, then
+    save it as a .tic to tic (default t.tic). Only that file is kept: the
+    bundle is written into a temporary folder for TIC-80 to load. Returns the
+    .tic's path; exits with TIC-80's output if either step fails."""
     exe = tic80_exe()
-    lua = os.path.basename(t.lua)
-    tmp = tempfile.mkdtemp(prefix=f"{t.name}-bundle-")
-    shutil.copy(t.lua, os.path.join(tmp, lua))
+    tic = tic or t.tic
+    # The name goes inside `--cmd "load X & save Y"`: keep it plain.
+    base = slug(t.name) or "cart"
+    lua = base + ".lua"
+    tmp = tempfile.mkdtemp(prefix=f"{base}-bundle-")
+    if t.code is not None:
+        with open(os.path.join(tmp, lua), "w", encoding="utf-8") as f:
+            f.write(t.code)
+    else:
+        shutil.copy(t.lua, os.path.join(tmp, lua))
     try:
         cmd = f"load {lua} & run"
         out = _run_tty([exe, "--fs=.", "--cli", "--skip", "--cmd", cmd], tmp, 10)
@@ -114,7 +124,7 @@ def verify(t):
             print("bundle: FAILED to boot alone")
             sys.exit(1)
         detail(f"bundle: boots headless from a directory containing only {lua}")
-        name = os.path.basename(t.tic)
+        name = base + ".tic"
         # This run ends itself (`& exit`), so the ceiling only has to be
         # above the worst case - saving a big cart on a thermally
         # throttled SBC has been seen to take >20 s.
@@ -126,9 +136,11 @@ def verify(t):
                 if line.strip():
                     print("   |", line[:120])
             sys.exit("bundle: TIC-80 did not write the .tic")
-        shutil.copy(src, t.tic)
-        detail(f"bundle: {show(t.tic)}"
-               f" ({os.path.getsize(src)} bytes) - this is the file to upload")
-        return t.tic
+        os.makedirs(os.path.dirname(os.path.abspath(tic)), exist_ok=True)
+        shutil.copy(src, tic)
+        if tic == t.tic:
+            detail(f"bundle: {show(tic)}"
+                   f" ({os.path.getsize(src)} bytes) - this is the file to upload")
+        return tic
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

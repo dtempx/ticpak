@@ -16,9 +16,9 @@ Given a text cart (.lua) instead of a .tic, it checks the header and reports
 bank usage from the `-- <MAP1>`-style section tags, so the dev source and the
 bundle can be checked with the same rule:
 
-    ticpak check dist/<game>.tic
+    ticpak check <game>.tic
     ticpak check main.lua                  # header + bank usage
-    ticpak check -q dist/<game>.tic        # violations and the exit code only
+    ticpak check -q <game>.tic             # violations and the exit code only
 
 Banks and PRO. Every TIC-80 build's cart loader reads all 8 banks, and sync()
 works in every build: TIC_BANKS is 8 unconditionally in tic.h, and neither

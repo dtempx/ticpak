@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The bundle for ticpak: find the cart, inline every module its entry
 stub requires as a package.preload entry, minify (minify.py), and write
-<out>/<name>.lua plus, when minified past comments, the decode maps.
+the bundle .lua (for a folder output, plus the decode maps when minified
+past comments). Target decides which outputs a build keeps (see -o).
 """
 import json
 import os
@@ -9,34 +10,77 @@ import re
 import sys
 
 from . import minify as minifier
-from .check import TEXT_SECTION_RE, check_header
+from .check import TEXT_SECTION_RE, check_header, parse_header
 from .console import detail, fwd, show
 from .header import CHUNK_RE, META_KEYS, cart_code
 
 FREE_LIMIT = 65536  # the free editor's code cap (PRO edits up to 512 KB; every player loads it all)
 
 
+def out_kind(out):
+    """What an -o value names: "tic" or "lua" for a file with that extension,
+    else "dir" (a name ending in / or \\, or with neither extension)."""
+    if out.endswith(("/", "\\")):
+        return "dir"
+    ext = os.path.splitext(out)[1].lower()
+    return ext[1:] if ext in (".tic", ".lua") else "dir"
+
+
 class Target:
     """One build's paths: the cart, the folder its modules sit in, and the
-    outputs <out>/<name>.lua, .tic, .txt, .minify.txt and .minify.json."""
+    outputs it keeps. Any output not kept is None.
 
-    def __init__(self, cart, name, out_dir):
+      out None        <cart dir>/<name>.tic only (the default)
+      out "x.tic"     x.tic only
+      out "x.lua"     x.lua (the bundle) only
+      out "dir/"      dir/<name>.lua, .tic, .txt, and with minification past
+                      comments .minify.txt and .minify.json
+
+    The name in a file -o is the file's own; `name` is used otherwise."""
+
+    def __init__(self, cart, name, out=None):
         self.cart = os.path.abspath(cart)
         self.cart_dir = os.path.dirname(self.cart)
-        self.name = name
-        self.dist_dir = os.path.abspath(out_dir)
-        out = os.path.join(self.dist_dir, name)
-        self.lua, self.tic, self.txt = out + ".lua", out + ".tic", out + ".txt"
-        self.map_txt, self.map_json = out + ".minify.txt", out + ".minify.json"
+        self.kind = "tic" if out is None else out_kind(out)
+        self.lua = self.tic = self.txt = self.map_txt = self.map_json = None
+        if self.kind == "dir":
+            self.name = name
+            self.dist_dir = os.path.abspath(out)
+            base = os.path.join(self.dist_dir, name)
+            self.lua, self.tic, self.txt = base + ".lua", base + ".tic", base + ".txt"
+            self.map_txt, self.map_json = base + ".minify.txt", base + ".minify.json"
+        else:
+            path = (os.path.join(self.cart_dir, name + ".tic") if out is None
+                    else os.path.abspath(out))
+            self.name = os.path.splitext(os.path.basename(path))[0]
+            self.dist_dir = os.path.dirname(path)
+            setattr(self, self.kind, path)
+        self.output = self.tic or self.lua      # the file the status line is about
+        self.code = None                        # the bundle text, once built
 
     def module_path(self, module):
         return os.path.join(self.cart_dir, *module.split(".")) + ".lua"
 
 
+def is_cart(path):
+    """A file is a cart (rather than a module on its own) if it is main.lua or
+    has a metadata header or asset sections."""
+    if os.path.basename(path).lower() == "main.lua":
+        return True
+    text = open(path, encoding="utf-8").read()
+    return bool(CHUNK_RE.search(text) or parse_header(text))
+
+
 def find_cart(source=None):
-    """The cart: SOURCE (a file, or a directory searched like the cwd), else
-    ./main.lua, else ./src/main.lua. None if there is none."""
+    """The cart: SOURCE (a .lua file, or a directory searched like the cwd),
+    else ./main.lua, else ./src/main.lua. None if there is none; exits if
+    SOURCE does not exist or is a file other than .lua."""
+    if source and not os.path.exists(source):
+        sys.exit(f"ticpak: {source} not found")
     if source and os.path.isfile(source):
+        if not source.lower().endswith(".lua"):
+            sys.exit(f"ticpak: {source} is not a .lua file - give the cart"
+                     " (main.lua), a module (.lua), or the folder holding main.lua")
         return os.path.abspath(source)
     base = source or os.getcwd()
     for rel in ("main.lua", os.path.join("src", "main.lua")):
@@ -63,22 +107,25 @@ def stub_requires(code):
     return names, first
 
 
-def freshness(t):
-    """(up_to_date, status line) for an existing package: is the .tic (and the
-    .lua bundle beside it) newer than the cart and every module it requires?
+def freshness(t, module=False):
+    """(up_to_date, status line) for an existing package: is its output (and,
+    for a folder output, the .lua bundle beside the .tic) newer than the cart
+    and every module it requires? module: t.cart is a module on its own.
     Timestamps only - a changed option (--minify) or tool does not count."""
-    built = os.path.getmtime(t.tic)
-    names, _ = stub_requires(cart_code(t.cart))
+    built = os.path.getmtime(t.output)
+    names = [] if module else stub_requires(cart_code(t.cart))[0]
     sources = [t.cart] + [t.module_path(n) for n in names]
     changed = [fwd(p) for p in sources
                if not os.path.isfile(p) or os.path.getmtime(p) > built]
-    missing = [] if os.path.isfile(t.lua) else [f"{fwd(t.lua)} missing"]
+    missing = ([f"{fwd(t.lua)} missing"]
+               if t.lua and t.lua != t.output and not os.path.isfile(t.lua) else [])
+    label = "output" if module else "cart"
     if not changed and not missing:
-        return True, f"cart: {fwd(t.tic)} (up-to-date)"
+        return True, f"{label}: {fwd(t.output)} (up-to-date)"
     listed = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more"
                                        if len(changed) > 5 else "")
     why = "; ".join(([f"{listed} changed"] if changed else []) + missing)
-    return False, f"cart: {fwd(t.tic)} (out-of-date: {why})"
+    return False, f"{label}: {fwd(t.output)} (out-of-date: {why})"
 
 
 def assemble(t):
@@ -191,7 +238,9 @@ def tag_lines(code, origin=None):
 
 
 def bundle(t, minify_options=frozenset()):
-    """Write <out>/<name>.lua; returns its code size before minification (bytes)."""
+    """Build the bundle into t.code, and write it to t.lua (plus, for a folder
+    output, the decode maps) when the target keeps one. Returns its code size
+    before minification (bytes)."""
     out, chunks, names, origin = assemble(t)
     raw = len(out.encode("utf-8"))
 
@@ -201,24 +250,25 @@ def bundle(t, minify_options=frozenset()):
         sys.exit(f"bundle: {e}")
     out = res.text
     tag_lines(out, origin if not minify_options else None)
+    if not check_header(out, quiet=True):
+        check_header(out)
+        sys.exit("bundle: the bundle lost header fields"
+                 " in bundling - fix META_KEYS / minifier.split_cart")
+    t.code = out + chunks
 
-    os.makedirs(t.dist_dir, exist_ok=True)
-    with open(t.lua, "w", encoding="utf-8") as f:
-        f.write(out + chunks)
-    if res.report is not None:
+    if t.kind == "dir":     # a lone .lua is saved once it boots (save_bundle)
+        save_bundle(t)
+    if t.map_txt and res.report is not None:
         write_maps(t, res, origin)
-    else:
+    elif t.map_txt:
         # Maps from an earlier minified build would decode this bundle wrongly.
         for path in (t.map_txt, t.map_json):
             if os.path.isfile(path):
                 os.remove(path)
-    if not check_header(out, quiet=True):
-        check_header(out)
-        sys.exit(f"bundle: {show(t.lua)} lost header fields"
-                 " in bundling - fix META_KEYS / minifier.split_cart")
 
     size = len(out)
-    detail(f"bundle: {len(names)} modules inlined -> {show(t.lua)}")
+    detail(f"bundle: {len(names)} modules inlined"
+           + (f" -> {show(t.lua)}" if t.lua else " (kept in memory)"))
     if minify_options:
         detail(f"        code {raw} -> {size} chars "
                f"({100 * (1 - size / raw):.1f}% smaller; minify: {minify_label(minify_options)})")
@@ -228,10 +278,33 @@ def bundle(t, minify_options=frozenset()):
     if size > FREE_LIMIT:
         detail(f"  INFO  (non-PRO) code is over the 64 KB free-editor limit; fine on PRO"
                " (up to 512 KB), and every build's player loads it")
-    if res.report is not None:
+    if t.map_txt and res.report is not None:
         detail(f"        report and name/line maps -> {show(t.map_txt)},"
                f" {os.path.basename(t.map_json)}")
     return raw
+
+
+def save_bundle(t):
+    """Write the built bundle t.code to t.lua."""
+    os.makedirs(os.path.dirname(t.lua), exist_ok=True)
+    with open(t.lua, "w", encoding="utf-8") as f:
+        f.write(t.code)
+
+
+def minify_module(t, minify_options=frozenset()):
+    """A module on its own (t.cart, no header or asset sections): minified as
+    a fragment, so its globals are left alone, and written to t.lua. Returns
+    (size before, size after) in bytes."""
+    src = open(t.cart, encoding="utf-8").read()
+    module_sections(src, os.path.basename(t.cart))
+    try:
+        out = minifier.minify_ex(src, mode=minify_options, whole_program=False).text
+    except (ValueError, minifier.LuaSyntaxError) as e:
+        sys.exit(f"minify: {show(t.cart)}: {e}")
+    os.makedirs(os.path.dirname(t.lua), exist_ok=True)
+    with open(t.lua, "w", encoding="utf-8") as f:
+        f.write(out)
+    return len(src.encode("utf-8")), len(out.encode("utf-8"))
 
 
 def write_maps(t, res, origin):
