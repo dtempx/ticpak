@@ -413,22 +413,24 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 ? Output name (no extension): [mygame]
 ? Minification:
-  1) all  - every option (smallest cart)
-  2) none - no minification (the inlined source verbatim)  [default]
+  1) all  - every option (smallest cart)  [default]
+  2) none - no minification (the inlined source verbatim)
   3) choose individual options...
 ? Minify options (space toggles, enter accepts):
-   1) [ ] comments    remove comments (keeps the metadata header and asset blocks)
-   2) [ ] rename      rename variables to the shortest free names (1-2 letters)
-   3) [ ] constants   inline constant values and remove the constants
-   4) [ ] whitespace  remove extraneous newlines and whitespace
-   5) [ ] extra       further optimisations
+   1) [x] comments    remove comments (keeps the metadata header and asset blocks)
+   2) [x] rename      rename variables to the shortest free names (1-2 letters)
+   3) [x] constants   inline constant values and remove the constants
+   4) [x] whitespace  remove extraneous newlines and whitespace
+   5) [x] extra       further optimisations
 ? Output:
-  1) mygame.tic only, beside main.lua  [default]
-  2) a folder: mygame.tic and mygame.lua (the bundle)
+  1) mygame.tic single-file output only  [default]
+  2) output to a folder: mygame.tic (binary), mygame.lua (the equivalent source text), plus additional files
 ? Output folder: [dist/]
 ```
 
-`Output folder` is asked only if you choose the folder. Options given on the
+`Output folder` is asked only if you choose the folder. Minification
+defaults to `all` here, unlike `build`, which minifies only with `-m`.
+Options given on the
 command line (`-m`, `-n`, `-o`) become the defaults, and `-r` writes the
 report as in `build`; `-o NAME.tic` or
 `-o NAME.lua` already says what to write, so then only the minification is

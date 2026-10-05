@@ -127,8 +127,8 @@ def ask_build_settings(ui, minify, name, out):
         print("  the name needs at least one letter or digit")
     minify = ask_minify(ui, minify)
     where = ui.select("Output:", [
-        ("tic", f"{name}.tic only, beside main.lua"),
-        ("dir", f"a folder: {name}.tic and {name}.lua (the bundle)"),
+        ("tic", f"{name}.tic single-file output only"),
+        ("dir", f"output to a folder: {name}.tic (binary), {name}.lua (the equivalent source text), plus additional files"),
     ], default="tic" if out is None else "dir")
     if where == "tic":
         return minify, name, None
@@ -203,7 +203,7 @@ def parse_args(argv):
                          " header's saveid, else its title); not with -o FILE,"
                          " which names the file itself")
     ap.add_argument("-m", "--minify", metavar="OPTION,...", type=minify_arg, nargs="?",
-                    const=minifier.ALL_OPTIONS, default=frozenset(),
+                    const=minifier.ALL_OPTIONS, default=None,
                     help="minify the bundle: --minify alone applies every"
                          " option; --minify=OPTION,... only those ("
                          + ", ".join(minifier.OPTIONS) + "; see the documentation"
@@ -239,6 +239,10 @@ def parse_args(argv):
         ap.error(f"-o {args.out} names the output file itself - drop -n,"
                  " or give -o a folder")
     args.source = args.sources[0] if args.sources and not args.files else None
+    # Without -m, build and check don't minify; the interactive question
+    # offers every option as its default.
+    if args.minify is None:
+        args.minify = frozenset() if command else minifier.ALL_OPTIONS
     return command, args, ap
 
 
