@@ -11,8 +11,9 @@ import sys
 
 from . import console                    # console.VERBOSE is read live (--verbose)
 from . import minify as minifier
-from .bundle import FREE_LIMIT
-from .check import check_tic, parse_tic, CHUNK_RAM_LIMIT, CODE_CHUNKS, COVER_CHUNKS
+from .bundle import FREE_LIMIT, flag_options, minify_label
+from .check import (check_tic, parse_tic, read_stamp, tic_code, CHUNK_RAM_LIMIT,
+                    CODE_CHUNKS, COVER_CHUNKS)
 from .console import detail, flat_line, fwd, show
 from .header import META_KEYS
 
@@ -115,7 +116,18 @@ def size_summary(tic, unminified=None):
              f"code limit: {kb(code)} / {kb(FREE_LIMIT)}"
              + (f" ({used}% used) - over the free editor's limit, fine on PRO (up to 512K)"
                 if code > FREE_LIMIT else f" ({used}% used, {100 - used}% free)")]
-    if unminified is not None and unminified - code > 16:
+    stamp = read_stamp(tic_code(data, chunks))
+    if stamp:               # built by ticpak 0.3.4+: it says how it was minified
+        options = flag_options(stamp[1])
+        if not options:
+            lines.append("not minified")
+        elif unminified is not None:
+            lines.append(f"original code size: {kb(unminified)}"
+                         f" ({100 * (1 - code / unminified):.0f}% reduction;"
+                         f" minify: {minify_label(options)})")
+        else:
+            lines.append(f"minify: {minify_label(options)}")
+    elif unminified is not None and unminified - code > 16:
         lines.append(f"original code size: {kb(unminified)}"
                      f" ({100 * (1 - code / unminified):.0f}% reduction)")
     elif unminified is not None:

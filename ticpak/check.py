@@ -121,6 +121,25 @@ def parse_header(code):
     return meta
 
 
+# The line ticpak adds to the header block: its version and the minify
+# options the build used, as the command line spells them (`-m`, `-m=a,b`).
+STAMP_RE = re.compile(r"^--\s*ticpak:\s*(\S+)[ \t]*(\S*)\s*$")
+
+
+def read_stamp(code):
+    """(version, minify flag) from the `-- ticpak:` line in the code's leading
+    comment block (flag "" when the build was not minified); None if there
+    is none (not built by ticpak, or by a ticpak before 0.3.4)."""
+    for line in code.splitlines():
+        s = line.strip()
+        if s and not s.startswith("--"):
+            break
+        m = STAMP_RE.match(s)
+        if m:
+            return m.group(1), m.group(2)
+    return None
+
+
 def check_header(code, quiet=False):
     """Check the metadata header in `code`. Returns True if complete."""
     meta = parse_header(code)
@@ -149,6 +168,9 @@ def check_header(code, quiet=False):
         for tag in REQUIRED_META + OPTIONAL_META:
             if tag in meta:
                 print(f"        {tag + ':':{width + 1}s} {meta[tag]}")
+        stamp = read_stamp(code)
+        if stamp:
+            print(f"        {'ticpak:':{width + 1}s} {' '.join(stamp).strip()}")
     return ok
 
 

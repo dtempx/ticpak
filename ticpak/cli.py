@@ -25,9 +25,9 @@ import tempfile
 
 from . import __version__, console
 from . import minify as minifier
-from .bundle import (DEFAULT_DIR, Target, built_target, bundle, find_cart, freshness,
-                     is_cart, minify_module, out_kind, save_bundle, stub_requires,
-                     unminified_size)
+from .bundle import (DEFAULT_DIR, Target, built_options, built_target, bundle, find_cart,
+                     freshness, is_cart, minify_flag, minify_module, options_label,
+                     out_kind, save_bundle, stub_requires, unminified_size)
 from .check import check_lua, check_tic
 from .console import FlatStdout, Prompts, fwd, has_terminal, highlight, show
 from .header import cart_code, ensure_header, package_name, slug
@@ -125,7 +125,7 @@ def ask_build_settings(ui, minify, name, out):
     if out is not None and out_kind(out) != "dir":
         return ask_minify(ui, minify), name, out
     while True:
-        name = ui.text("Cart name:", name, suffix=".tic")
+        name = ui.text("cart name:", name, suffix=".tic")
         if name.lower().endswith(".tic"):   # typed the extension anyway
             name = name[:-4]
         name = slug(name)
@@ -134,8 +134,8 @@ def ask_build_settings(ui, minify, name, out):
         print("  the name needs at least one letter or digit")
     minify = ask_minify(ui, minify)
     where = ui.select("Output:", [
-        ("tic", f"{name}.tic - output .tic binary only"),
-        ("dir", f"output all files to a folder - {name}.tic (binary), {name}.lua (the equivalent source text), etc."),
+        ("tic", f"output {name}.tic only"),
+        ("dir", f"output all files to a folder - {name}.tic (binary), {name}.lua (source), etc."),
     ], default="tic" if out is None else "dir")
     if where == "tic":
         return minify, name, None
@@ -151,16 +151,15 @@ def build_report(report, out):
     return report or (True if out is not None and out_kind(out) == "dir" else None)
 
 
-def build_command(source, minify, name, default_name, out, report=None):
+def build_command(source, minify, name, default_name, out, report=None, force=False):
     """The `ticpak bundle` command line that repeats an interactive build's
-    answers (and -r), leaving out anything that is already the default."""
-    parts = ["ticpak", "bundle"]
+    answers (and -r), leaving out anything that is already the default;
+    force: with -f, to rebuild an output that is up to date."""
+    parts = ["ticpak", "bundle"] + (["-f"] if force else [])
     if source:
         parts.append(source)
-    if minify == minifier.ALL_OPTIONS:
-        parts.append("-m")
-    elif minify:
-        parts.append("-m=" + ",".join(o for o in minifier.OPTIONS if o in minify))
+    if minify:
+        parts.append(minify_flag(minify))
     if name != default_name and (out is None or out_kind(out) == "dir"):
         parts += ["-n", name]
     if out is not None:
@@ -325,17 +324,18 @@ def main(argv=None):
         t = Target(cart, name or "game", out, report)
     guard_sources(t)
 
-    fresh, rerun = False, None
+    fresh, rerun, last = False, None, None
     if os.path.isfile(t.output):
         fresh, status = freshness(t)
         print(status)
+        last = built_options(t.output)
     else:
         print(f"cart: {fwd(t.output)} (not built yet)")
 
     if interactive:
-        if os.path.isfile(t.output):
-            print("hint: ticpak bundle -f" + (f" -o {out}" if out else "")
-                  + " to force rebuild")
+        if os.path.isfile(t.output):    # rebuild it as it was built
+            force_hint(build_command(args.source, last, t.name, package_name(meta), out,
+                                     force=True))
             return
         print("hint: answer the questions below to build it (Ctrl+C to cancel)")
         args.minify, name, out = ask_build_settings(Prompts(), args.minify, t.name, out)
@@ -359,6 +359,8 @@ def main(argv=None):
             write_report(t, buf.getvalue())
             sys.exit(0 if ok else 1)
         return
+    if not rerun:
+        options_note(last, args.minify, fresh and not args.force)
     if fresh and not args.force:
         # -r: the report of the .tic already built. A folder's report is one
         # of its outputs, so it exists and holds the savings: leave it be.
@@ -366,7 +368,8 @@ def main(argv=None):
             check_summary(t, unminified_size(t))
         elif t.tic:
             print("\n".join(size_summary(t.tic, unminified_size(t))))
-        print("hint: ticpak bundle -f to force rebuild")
+        force_hint(build_command(args.source, args.minify, t.name, package_name(meta),
+                                 args.out, args.report, force=True))
         return
     try:
         unminified = bundle(t, minify_options=args.minify)
@@ -390,10 +393,23 @@ def main(argv=None):
             rerun_hint(rerun)
 
 
+def force_hint(command):
+    print("hint: " + highlight(command) + " to force rebuild")
+
+
+def options_note(last, minify, skipped):
+    """A `ticpak bundle` whose -m differs from the one the existing output was
+    built with (last; None: unknown) says so: it rebuilds with the options
+    asked for, or (skipped, up to date) did not rebuild at all."""
+    if last is None or last == minify:
+        return
+    print(f"note: {'it was built with' if skipped else 'the last build used'}"
+          f" {options_label(last)}; this command asks for {options_label(minify)}")
+
+
 def rerun_hint(rerun):
-    """The command that repeats an interactive build, highlighted on its own line."""
-    print("hint: use the following command to build with these settings again")
-    print(highlight(rerun))
+    """The command that repeats an interactive build, highlighted."""
+    print("hint: " + highlight(rerun) + " to build with these settings again")
 
 
 def guard_sources(t):
@@ -427,23 +443,28 @@ def build_module(command, args, path, interactive):
     t.kind = "module"
     guard_sources(t)
 
-    fresh, rerun = False, None
+    fresh, rerun, last = False, None, None
     if os.path.isfile(t.lua):
         fresh, status = freshness(t, module=True)
         print(status)
+        last = built_options(t.lua)
     else:
         print(f"output: {fwd(t.lua)} (not built yet)")
     if interactive:
-        if os.path.isfile(t.lua):
-            print("hint: ticpak bundle -f to force rebuild")
+        if os.path.isfile(t.lua):       # rebuild it as it was built
+            force_hint(build_command(args.source, last, name, default_name, args.out,
+                                     force=True))
             return
         print("hint: answer the question below to build it (Ctrl+C to cancel)")
         args.minify = ask_minify(Prompts(), args.minify)
         args.force = True
         rerun = build_command(args.source, args.minify, name, default_name, args.out,
                               args.report)
+    else:
+        options_note(last, args.minify, fresh and not args.force)
     if fresh and not args.force:
-        print("hint: ticpak bundle -f to force rebuild")
+        force_hint(build_command(args.source, args.minify, name, default_name, args.out,
+                                 args.report, force=True))
         return
     before, after = minify_module(t, args.minify)
     saved = []

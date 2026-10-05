@@ -17,7 +17,7 @@ cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
 code limit: 41K / 64K (64% used, 36% free)
-original code size: 151K (73% reduction)
+original code size: 151K (73% reduction; minify: all)
 ```
 
 ## Quick start
@@ -216,7 +216,11 @@ asset data, stored as hex in comment lines.
 3. **Bundles.** Every required module is inlined as a `package.preload`
    entry, so `require` still works with no filesystem. The code is minified
    if you asked for it, and the asset sections are copied byte for byte after
-   it. The result is the bundle, `<name>.lua`.
+   it. The result is the bundle, `<name>.lua`. ticpak adds one line to the
+   header block, `-- ticpak: 0.3.4 -m`: its version and the `-m` it built
+   with (none when not minified). It is how a later run knows how the `.tic`
+   or `.lua` was built. TIC-80 ignores it, and it costs about 20 bytes of
+   code.
 4. **Boots the bundle headless** in TIC-80, from a temporary folder holding
    only that file, so a missing module or a syntax error fails now rather
    than after you upload.
@@ -371,9 +375,17 @@ cart: mygame.tic (not built yet)
 Up to date means the output (the `.tic`, or with `-o NAME.lua` the bundle;
 with a folder, the `.tic`, with the `.lua` and the report beside it) is newer
 than `main.lua` and every module. `bundle` skips an up-to-date cart, so running it
-on every save is cheap; it still prints the summary, then
-`hint: ticpak bundle -f to force rebuild`. Only file timestamps count, so after
-changing `-m` or upgrading ticpak, use `bundle -f`.
+on every save is cheap; it still prints the summary, then a hint that repeats
+your command with `-f`, such as `hint: ticpak bundle -f -m -o dist/ to force
+rebuild`. Only file timestamps count, so after changing `-m` or upgrading
+ticpak, use `bundle -f`. When your `-m` differs from the one the output was
+built with (read from its `-- ticpak:` line), `bundle` says so, whether it
+rebuilds or not:
+
+```
+note: it was built with -m; this command asks for no minification
+note: the last build used -m; this command asks for -m=comments
+```
 
 ### The summary
 
@@ -382,7 +394,7 @@ cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
 code limit: 41K / 64K (64% used, 36% free)
-original code size: 151K (73% reduction)
+original code size: 151K (73% reduction; minify: all)
 ```
 
 - **cart size** is the `.tic` file's size.
@@ -393,7 +405,10 @@ original code size: 151K (73% reduction)
   editor's 64K. Past it the line adds `- over the free editor's limit, fine
   on PRO (up to 512K)`.
 - **original code size** is the code's size before minification and the
-  saving, or `not minified`.
+  saving, with the options used (`(73% reduction; minify: all)`), or `not
+  minified`. The options come from the cart's `-- ticpak:` line, so `check`
+  shows them too. A cart built before ticpak 0.3.4 has no such line, and
+  then only the size and the saving show.
 
 By default the summary, the status lines and any error or limit violation are
 all ticpak prints. `--verbose` adds the progress lines, every size, anything
@@ -465,8 +480,8 @@ Run `ticpak` with no command. If the cart has never been built, it prints
    4) [x] whitespace  remove extraneous newlines and whitespace
    5) [x] extra       further optimisations
 ? Output:
-  1) mygame.tic - output .tic binary only [default]
-  2) output all files to a folder - mygame.tic (binary), mygame.lua (the equivalent source text), etc.
+  1) output mygame.tic only [default]
+  2) output all files to a folder - mygame.tic (binary), mygame.lua (source), etc.
 ? Output folder: [dist/]
 ```
 
@@ -481,17 +496,21 @@ Enter on an empty line to accept.
 
 After the build it prints the `bundle` command that repeats your answers, for
 later rebuilds, scripts, or setting up the same build elsewhere. Answers that
-match the defaults are left out. The command is on a line of its own,
-highlighted when the terminal shows colour (not with `NO_COLOR` set):
+match the defaults are left out. Commands in hints are highlighted when the
+terminal shows colour (not with `NO_COLOR` set):
 
 ```
-hint: use the following command to build with these settings again
-ticpak bundle -m=comments,whitespace -n mygame-lite -o dist/
+hint: ticpak bundle -m=comments,whitespace -n mygame-lite -o dist/ to build with these settings again
 ```
 
 If the default output (`<name>.tic` beside `main.lua`, or `-o`'s) already
-exists, it asks nothing. It prints the status lines
-and `hint: ticpak bundle -f to force rebuild`, and exits.
+exists, it asks nothing. It prints the status lines and a hint with the
+command that rebuilds it as it was built, `-m` included (from its
+`-- ticpak:` line), and exits:
+
+```
+hint: ticpak bundle -f -m -o dist/ to force rebuild
+```
 
 With no terminal (piped input, CI) it doesn't guess. It tells you to use
 `bundle` or `check` and exits with status 2. `-q` needs a command too, since

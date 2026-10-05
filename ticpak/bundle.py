@@ -9,8 +9,10 @@ import os
 import re
 import sys
 
+from . import __version__
 from . import minify as minifier
-from .check import TEXT_SECTION_RE, check_header, parse_header
+from .check import (META_LINE_RE, STAMP_RE, TEXT_SECTION_RE, check_header, parse_header,
+                    parse_tic, read_stamp, tic_code)
 from .console import detail, fwd, show
 from .header import CHUNK_RE, META_KEYS, cart_code
 
@@ -222,14 +224,17 @@ def module_sections(src, fname):
 
 def unminified_size(t):
     """The bundle's code size before minification, re-assembled (for `check`,
-    which did not build); None if the modules cannot be assembled now."""
+    which did not build), with the output's `-- ticpak:` line as bundle()
+    counts it; None if the modules cannot be assembled now."""
     import contextlib
     import io
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            return len(assemble(t)[0].encode("utf-8"))
+            size = len(assemble(t)[0].encode("utf-8"))
     except SystemExit:
         return None
+    stamp = built_stamp(t.output)
+    return size + (len(f"-- ticpak: {' '.join(stamp)}".rstrip()) + 1 if stamp else 0)
 
 
 def minify_label(options):
@@ -239,6 +244,75 @@ def minify_label(options):
     if set(options) == set(minifier.OPTIONS):
         return "all"
     return ", ".join(o for o in minifier.OPTIONS if o in options)
+
+
+def minify_flag(options):
+    """The -m flag for options as the command line spells it: "-m" for every
+    option, "-m=a,b" (in OPTIONS order) for some, "" for none."""
+    if not options:
+        return ""
+    if options == minifier.ALL_OPTIONS:
+        return "-m"
+    return "-m=" + ",".join(o for o in minifier.OPTIONS if o in options)
+
+
+def flag_options(flag):
+    """minify_flag() read back: the options a -m flag names (options this
+    version does not know are dropped)."""
+    if flag == "-m":
+        return minifier.ALL_OPTIONS
+    items = [o for o in flag[3:].split(",") if o in minifier.OPTIONS] \
+        if flag.startswith("-m=") else []
+    return minifier.parse_options(items) if items else frozenset()
+
+
+def add_stamp(code, options):
+    """code with the `-- ticpak: VERSION [-m...]` line that records the build:
+    after the last metadata tag of the leading comment block, or first when
+    there is none (a module), replacing one already there. Added after
+    minifying, which would strip it. Returns (code, n): the stamp is line n
+    + 1, and lines from there on moved down one (n None: replaced in place)."""
+    stamp = f"-- ticpak: {__version__} {minify_flag(options)}".rstrip()
+    lines = code.split("\n")
+    at = 0
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s and not s.startswith("--"):
+            break
+        if STAMP_RE.match(s):
+            lines[i] = stamp
+            return "\n".join(lines), None
+        m = META_LINE_RE.match(s)
+        if m and m.group(1).lower() in META_KEYS:
+            at = i + 1
+    lines.insert(at, stamp)
+    return "\n".join(lines), at
+
+
+def built_stamp(path):
+    """read_stamp() of an existing output (.tic or .lua); None if it has no
+    `-- ticpak:` line or cannot be read."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    if path.lower().endswith(".tic"):
+        code = tic_code(data, parse_tic(data)[0])
+    else:
+        code = data.decode("utf-8", errors="replace")
+    return read_stamp(code)
+
+
+def built_options(path):
+    """The minify options an existing output was built with; None if unknown."""
+    stamp = built_stamp(path)
+    return flag_options(stamp[1]) if stamp else None
+
+
+def options_label(options):
+    """options for a message: the -m flag, or "no minification"."""
+    return minify_flag(options) or "no minification"
 
 
 TIC80_TAG_RE = re.compile(r"^-- <[A-Za-z]")
@@ -282,16 +356,25 @@ def bundle(t, minify_options=frozenset()):
         sys.exit(f"bundle: {where}: {e.msg}")
     except ValueError as e:
         sys.exit(f"bundle: {e}")
+    out = res.text
+    tag_lines(out, origin if not minify_options else None)
+    out, at = add_stamp(out, minify_options)
+    if at is not None:      # the decode map's output lines move down past it
+        res.line_map = [(o + (o > at), i) for o, i in res.line_map]
+    # The stamp is ticpak's own line, as the preload wrappers are: in the
+    # size before minifying too, so the reduction compares like with like.
+    stamp = len(out.encode("utf-8")) - len(res.text.encode("utf-8"))
+    raw += stamp
     if res.savings is not None:
         def file_of(line):
             f = origin[line - 1][0] if 0 < line <= len(origin) else None
             return f or ADDED
         groups = res.savings.group(file_of)
-        if ADDED in groups:
-            groups[ADDED] = groups.pop(ADDED)       # last
+        added = groups.pop(ADDED, {})               # last
+        added["source"] = added.get("source", 0) + stamp
+        added["final"] = added.get("final", 0) + stamp
+        groups[ADDED] = added
         t.savings = (groups, res.savings, minify_options)
-    out = res.text
-    tag_lines(out, origin if not minify_options else None)
     if not check_header(out, quiet=True):
         check_header(out)
         sys.exit("bundle: the bundle lost header fields"
@@ -344,7 +427,7 @@ def minify_module(t, minify_options=frozenset()):
                                  savings=bool(minify_options))
     except (ValueError, minifier.LuaSyntaxError) as e:
         sys.exit(f"minify: {show(t.cart)}: {e}")
-    out = res.text
+    out = add_stamp(res.text, minify_options)[0]
     if res.savings is not None:
         name = os.path.basename(t.cart)
         t.savings = (res.savings.group(lambda line: name), res.savings, minify_options)

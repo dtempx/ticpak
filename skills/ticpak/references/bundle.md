@@ -41,7 +41,9 @@ can't be a `.tic`.
 
    - **`-f` forces a build.** Without it, `bundle` skips a cart whose
      timestamps are up to date, and timestamps don't notice a changed `-m`
-     or a ticpak upgrade.
+     or a ticpak upgrade. A `note: it was built with -m; this command asks
+     for ...` line means the existing output used a different `-m` from the
+     one given.
    - **Write `-m=a,b` with `=`.** In `-m path/to/main.lua`, the path is read
      as the option list.
 
@@ -68,7 +70,7 @@ can't be a `.tic`.
    code: 41K (37%)
    assets: 69K (63%)
    code limit: 41K / 64K (64% used, 36% free)
-   original code size: 151K (73% reduction)
+   original code size: 151K (73% reduction; minify: all)
    ```
 
    Exit status 1 means a limit or header violation, printed above the
@@ -130,7 +132,9 @@ TIC-80 reports `[string "-- title: ..."]:37: message`. Line 37 is a line of
 the **bundle**, not of a module. A default build keeps only the `.tic`, so
 first rebuild the same way (same `-m`) with `-f -o dist/` to get
 `dist/<name>.lua` and, past `comments`, its decode maps. The line numbers
-match: the bundle is the same.
+match: the bundle is the same. To find the `-m` it was built with, run
+`ticpak check <name>.tic`: its header lists `ticpak: 0.3.4 -m=...`, the line
+ticpak added to the cart (none on carts built before 0.3.4).
 
 - **Built with any option past `comments`:** look up `"37"` under `"lines"` in
   `dist/<name>.minify.json`. It gives `[file, line]` in your sources. The
