@@ -55,6 +55,7 @@ SAMPLES = {
     # "_note" adds a plain comment line to the header block (not a tag)
     "nominify_main": ("nominify_main.lua", "minimal",
                       {"_note": "NOMINIFY: this whole cart ships as written"}, "\n"),
+    "nominify_comments": ("nominify_comments.lua", "minimal", {}, "\n"),
 }
 
 

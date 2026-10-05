@@ -81,6 +81,7 @@ can't be a `.tic`.
 | boot output with `module 'x' not found`, then `FAILED to boot alone` | A module that only another module requires. Add `require "x"` to `main.lua`: ticpak inlines only the modules named there. |
 | boot output with `[string "..."]:N:` or `stack traceback` | A syntax or runtime error during boot. Decode `N` as below and fix the source. |
 | `TIC-80 reads a line starting -- < ...` | A module comment starts `-- <` in column 0. Reword or indent it, or build with at least `-m=comments`. |
+| `x.lua:N: a comment kept by NOMINIFY has a line starting -- <` | A comment that a `NOMINIFY` directive keeps would read as an asset section tag. Reword or indent that line. |
 | `x.lua:N starts an asset section (-- <MAP>), but only main.lua's asset sections are packaged` | A module holds asset data, which would be cut off or silently stripped. Move the whole section into `main.lua`'s asset sections, merging with any existing section of the same name. |
 | `no asset chunks found` | `main.lua` has no `-- <TILES>`-style section. Save the cart once from TIC-80 Pro, or add the `PALETTE` section from [init.md](init.md). |
 | `entry stub requires no modules` | `main.lua` has no `require` lines. A single-file cart doesn't need ticpak. |

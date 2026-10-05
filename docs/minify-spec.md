@@ -5,11 +5,8 @@ all 8 TIC-80 ports (§6). Usage is in [`minify.md`](minify.md). This file is the
 contract. Each requirement has an ID so code, tests and review comments can cite
 it.
 
-> **History.** Until 2026-10-02 this specified a new `aggressive` level to sit
-> beside `max`. At the owner's request it **replaced** `max` instead: the old
-> one-line `max` is gone, and `ticpak --minify=max` now runs everything
-> below. Where the implementation departs from the original draft, the
-> requirement says so in an **As built** note, and §7 logs the change.
+Where the implementation departs from the original draft, the requirement
+says so in an **As built** note, and §7 logs the decision.
 
 ## 1. Purpose and scope
 
@@ -372,23 +369,26 @@ expression, or a read of an always-falsy binding (D9).
 - **e. Labels:** renamed per function, from a separate pool (labels have their
   own namespace).
 - **f. Determinism:** the same input and options always give the same output.
-- **g. NOMINIFY opt-out (added 2026-10-03).** A comment containing `NOMINIFY`,
-  matched case-insensitively anywhere in its text (`-- tuning knob, nominify`),
-  exempts from renaming every binding that is **declared or assigned on that
-  source line**: a `local` declaration, a parameter or `for` variable, or an
-  assignment (`x = …`) to a local or global. One marker keeps the name at
-  every occurrence, reads included. A binding marked at any one of its
-  declaration/assignment lines is kept. A line that only reads a variable
-  marks nothing.
-  - A block comment (`--[[ … ]]`) counts for the line it starts on.
-  - `NOMINIFY` inside a string literal is not a marker.
-  - The marker affects renaming only. The other passes treat the binding as
-    before, so a marked constant can still be inlined (R4) and a marked unused
-    binding still removed (R7).
-  - The comment itself is removed like any other comment.
+- **g. NOMINIFY for variables (added 2026-10-03, revised 2026-10-05).** A
+  NOMINIFY directive (R8i a) attached to a `local` statement, an assignment or
+  a `for` loop keeps each variable that statement declares or assigns: a name
+  in a `local` list, a plain-name assignment target (`x = …`, local or
+  global; `t.x = …` assigns no variable), or a loop variable. One directive
+  keeps the binding at every occurrence, reads included. A binding marked at
+  any one of its declaration/assignment statements is kept. A statement that
+  only reads a variable marks nothing.
+  - A kept binding is **pinned** like a name used by protected code (R8h g):
+    never renamed, never a constant (R4) or always-falsy (D9), never
+    aliased (R11), always live for tree shaking (R7). So a kept constant is
+    not inlined and a kept unused binding is not removed.
+  - The directive's comment is removed like any other comment.
   - A kept name joins the excluded set of the name pool (b), so no renamed
     binding can take it.
-  - The report lists each kept name with its marker line (R10f).
+  - The report lists each kept name with the line of the statement that
+    declares or assigns it (R10f).
+  - **As built:** `directives()` records each kept variable as (source line,
+    name) of its declaring/assigning name token; `Info` pins every binding
+    with a declaration or write at such a pair.
 - **As built:** globals and locals share one allocation, ordered by occurrence
   count. A local's lifetime is the span from its first to its last occurrence
   (declaration, reads and writes). Two locals may share a name when their spans
@@ -399,26 +399,30 @@ expression, or a read of an always-falsy binding (D9).
   globals). Bytecode identity under local renaming is proven on every port
   (R10c).
 
-**R8h. NOMINIFY for functions and modules (added 2026-10-04).** A comment
-containing `NOMINIFY` (any case) can also protect a whole function or module
-from every option: no comment removal, renaming, inlining, folding, layout or
-anything else inside it. It comes out byte for byte.
-- **a. Function level.** A function (a `function` statement, a `local
-  function`, or a `function` expression) is protected when a NOMINIFY comment
-  is:
-  - on the line of its `function` keyword, or
-  - in the comment block directly above that line, or
-  - in the comment block directly below it (the first lines of the body).
+**R8h. NOMINIFY for functions and modules (added 2026-10-04, revised
+2026-10-05).** A NOMINIFY directive (R8i a) can also protect a whole function
+or module from every option: no comment removal, renaming, inlining, folding,
+layout or anything else inside it. It comes out byte for byte.
+- **a. Function level.** A directive protects:
+  - the function of a `function` statement or `local function` it is
+    attached to;
+  - each function value (`function … end` written directly) among the
+    expressions of a `local` statement or assignment it is attached to;
+  - each function whose `function` keyword is on the line the directive
+    applies to (R8i b): the line after a block, or the line of a comment
+    after code.
+  A directive inside a function's body is attached to the statement after
+  it, never to the function.
 - **b. Module level.** A module is protected when a NOMINIFY comment is in
   its top comment block: the first comment lines of the module, after any
   leading blank lines. In a bundle, a module is the body of `package.preload["m"]
   = function(...) … end`, and its top block is the comment lines that follow
-  that declaration.
-- **c. Comment blocks.** A comment block is a run of lines holding only
-  comments. A blank line or a line of code ends it. So a NOMINIFY block, then
-  a blank line, then a function is not a function-level directive. In a
-  module's top block it is a module-level one; anywhere else it protects
-  nothing.
+  that declaration. A directive attached to the preload assignment itself
+  (a block above it) does not protect the module.
+- **c. Comment blocks.** As R8i a. A blank line ends a block, so a NOMINIFY
+  block, then a blank line, then a function does not protect the function.
+  In a module's top block it is a module-level directive; anywhere else it
+  keeps its own comment (R8i).
 - **d. Module level wins.** When a directive could be read as both — a
   module's top block running straight into a function declaration — the
   module is protected. More generally, a protected region inside another
@@ -445,12 +449,61 @@ anything else inside it. It comes out byte for byte.
   in `whitespace` mode it spans several output lines. The line map gives each
   of its lines its own source line (R10g).
 - **i. `comments` alone** skips protected text when it strips comments.
-- **As built:** `nominify_regions()` finds the protected (start, end) offsets
-  on the token stream, matching each `function` to its `end` by block depth.
-  `protect()` replaces each region's tokens with one `raw` token. The parser
+- **As built:** `directives()` lexes and parses the source once, recording
+  every statement's token span and every function's `function`, `(` and
+  `end` tokens, and resolves each directive against them. `protect()`
+  replaces each protected region's tokens with one `raw` token. The parser
   turns that token into a `Func` that carries the text, and the emitter
   writes it back unchanged. The final re-lex proof expands raw tokens before
   comparing (R10b). The report lists each protected region's start line.
+
+**R8i. NOMINIFY directives and kept comments (added 2026-10-05).**
+- **a. Directives.** A comment containing the word `NOMINIFY` — any case, a
+  whole word (`\bnominify\b`: not `nominifying`, not `NOMINIFY_X`), never
+  inside a string literal — makes a directive in one of two forms:
+  - a **comment block**: a run of one or more comments, each starting on a
+    line with no code before it. A blank line or a line of code ends it. The
+    block is a directive if any of its comments holds the word;
+  - a **trailing comment**: one comment that follows code on its line.
+- **b. Attachment.** A block applies to the line right after its last line
+  (or to its last line, when code follows the block's last comment there),
+  and is attached to every statement, at any depth, that starts on that
+  line. A trailing comment applies to its own line and is attached to every
+  statement that starts or ends on it. A blank line or the end of the source
+  after a block means it applies to nothing. Then R8g and R8h a say what
+  each attached statement and function keeps.
+- **c. Kept comments.** A directive that keeps nothing by R8g, R8h a or
+  R8h b (a block before a blank line, a call, an `if`, a `return` or the end
+  of a block; a trailing comment after such code) keeps its own comment: the
+  source text from the first comment's `--` to the end of the last comment,
+  byte for byte. A kept comment inside protected text (R8h) is part of it.
+- **d. Placement.** A kept comment stays where it was when that is between
+  two statements or table fields (or at the start or end of a block or
+  table). Anywhere else, inside an expression, it moves to just after the
+  innermost statement around it, and is treated as a trailing comment.
+- **e. Layout.** A comment that had its own line(s) starts a new output
+  line; a trailing one is appended to the current line, after a space. Code
+  after a kept comment always starts a new line. Kept comments don't count
+  toward the 120-column width (R3). The line map gives each of a comment's
+  lines its own source line, and the line after it a later one (R10g).
+- **f. Other passes.** A kept comment goes with the code around it: one in a
+  block, function or module that a pass removes is removed too. It is never
+  removed as unreachable (R6). Two `local` statements with a kept comment
+  between them are not adjacent for merging (R11).
+- **g. Asset tags.** A kept comment with a line starting `-- <` and a letter
+  (the first line after any indentation) is an error naming that line:
+  TIC-80 would read it as the start of the asset sections (D1).
+- **h. Carts.** `split_cart` ends a cart's leading comment run at a
+  NOMINIFY block after the header block, provided no metadata tag follows
+  it, so that block becomes code and is kept. The code's own first block is
+  then not a whole-module directive (R8h e covers the cart's top block).
+  When the code starts with a kept comment, a blank line separates it from
+  the header block.
+- **As built:** `directives()` gives each kept comment's span and the index
+  of the token it goes before; `protect()` inserts it there as one
+  `("comment", CommentText)` token. The parser makes it a `Comment`
+  statement, or a `"comment"` table field. The emitter writes it back. The
+  final re-lex proof skips comment tokens (R10b).
 
 **R9. Pass order.** `fold → inline → dce → shake`, repeated until nothing
 changes (and at most 10 rounds; reaching the cap is an error), then `rename`,
@@ -512,9 +565,12 @@ and 2–3 is typical. The small passes (sugar, alias, merge, tidy) run *before*
   - the UPPER_CASE names that failed D8, with the clause;
   - the zero-write globals;
   - any dynamic-access trigger and the passes it disabled;
-  - the names kept by a NOMINIFY comment (R8g), with the marker's line;
-  - the functions and modules kept verbatim by a NOMINIFY comment (R8h), with
-    the line each starts on.
+  - the names kept by a NOMINIFY directive (R8g), with the line of their
+    declaring or assigning statement;
+  - the functions and modules kept verbatim by a NOMINIFY directive (R8h),
+    with the line each starts on;
+  - the comments kept by a NOMINIFY directive (R8i), with the line each
+    starts on.
 - **g. Maps** (`dist/<game>.minify.json`): for each renamed binding, the new
   name, original name, kind (local, global or label), enclosing function and
   source line; and for each output line, the source module and line of its
@@ -592,8 +648,6 @@ Tests live in `tests/minify/`: `run.py` (fold, bytecode, fixtures),
 - **2026-10-02:** inlining strings is size-guarded (Q2, R4b).
 - **2026-10-02:** the max layout puts each function start on its own line
   and wraps at 120 columns (Q3, R3).
-- **2026-10-02:** the planned `aggressive` level **replaced `max`** instead of
-  sitting beside it (owner's decision). The old one-line `max` is removed.
 - **2026-10-02 (as built):** every constant is size-guarded, not only strings
   (R4a). The reserved list is embedded in `minify.py` (D4.2). D6 triggers on
   any read of the dynamic names. D6a (escaping `require`) and I1a (fragment
@@ -633,3 +687,14 @@ Tests live in `tests/minify/`: `run.py` (fold, bytecode, fixtures),
   pass can reach inside. What the protected code uses is pinned rather than
   analysed — conservative but safe, and checked by the behaviour tests. Code
   with no marker is unchanged (210 port modules byte-identical).
+- **2026-10-05:** NOMINIFY reworked around comment blocks and statements
+  (R8g, R8h, R8i), at the owner's request. A directive is a comment block or
+  a trailing comment, attached to the statement after the block or on the
+  comment's line, instead of to source lines. Changes: a block above a
+  `local`, assignment or `for` now keeps those variables; a kept variable is
+  pinned, so it is no longer inlined or removed; a function's closing line
+  marks it too; a block in a function body's first lines no longer protects
+  the function; a directive that keeps nothing keeps its own comment; a
+  directive above a preload line no longer protects the module; the word
+  must be a whole word. Port output is unchanged (218 port files
+  byte-identical under four option sets; 8/8 ports identical in `difftest`).

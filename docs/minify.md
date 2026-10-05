@@ -12,13 +12,13 @@ covers usage, behaviour and testing.
 
 ## Options
 
-Since 2026-10-03 minification is a set of options, combined with commas
+Minification is a set of options, combined with commas
 (`--minify=comments,rename` in `ticpak`, `--mode=comments,rename` here):
 
 | Option | What it does | Pass |
 |---|---|---|
 | `comments` | Removes comments and nothing else: indentation, blank lines and line breaks stay as written. A line that held only comments is dropped. Header metadata and asset chunks pass through. | (comment stripper) |
-| `rename` | Variables get the shortest free names (1–2 letters). A `NOMINIFY` comment keeps a name: see [Keeping a name](#keeping-a-name-nominify). | rename |
+| `rename` | Variables get the shortest free names (1–2 letters). A `NOMINIFY` comment keeps a name: see [Opting out](#opting-out-nominify). | rename |
 | `constants` | Constant values are inlined and the constants' declarations removed. With `extra` off, a restricted removal deletes only constants nothing reads any more; with `rename` off, the size check costs names at their real length. | inline |
 | `whitespace` | Extraneous newlines and whitespace removed: one function start per line, packed to 120 columns. **Without it, the source's line breaks are kept**, one space of indent per block level. | layout |
 | `extra` | Every further optimisation, together: constant expressions evaluated, unreachable code removed, functions/variables/modules nothing uses removed, call sugar, API aliasing, `local` merging. | fold, dce, shake, sugar, alias, merge |
@@ -36,20 +36,12 @@ them removes comments too (`comments` is added automatically).
 | `--minify=constants` | `comments,constants` (line breaks kept) | 56,769 |
 | `--minify=whitespace` | `comments,whitespace` | 54,981 |
 | `--minify=rename,constants,extra` | line breaks kept | 47,560 |
-| `--minify` | every option: the whole-program pipeline below, output identical to the old `max` mode | 42,039 |
+| `--minify` | every option: the whole-program pipeline below | 42,039 |
 
 In `ticpak`, no `--minify` means no minification, a bare `--minify` means
 every option, and `--minify=OPTION,...` means just those. This module's API
 and its `--mode` take the same comma-separated options (empty: passthrough),
-plus `max` for every option. The `default`/`all`/`none` presets that existed
-briefly on 2026-10-03 are gone.
-
-> **Superseded 2026-10-03.** Until then there were three modes: `none`,
-> `default` and `max`. The old `default` removed comments **and** compacted
-> whitespace, keeping line breaks but re-indenting to one space per block
-> (61,419 on wavynavy). No option set reproduces it exactly. `comments` alone
-> keeps the original indentation, so it is larger: 66,262 on wavynavy. `comments,whitespace` packs lines and is smaller (54,981). `max`
-> is unchanged: every option, `--minify` in `ticpak`.
+plus `max` for every option.
 
 ## What `max` does
 
@@ -67,64 +59,87 @@ always analyses the current code.
 | **sugar** | `f("s")` becomes `f"s"`, and `f({…})` becomes `f{…}`. |
 | **alias** | A heavily used API or library name (`spr`, `ipairs`, `math.floor`, …) gets a single local alias at the top of the main chunk. Every module is a closure nested inside the main chunk, so one alias covers all of them. This saves characters, and a local read is faster than a global one. It is skipped for any name the program writes, and reverted if a function would exceed Lua's 255-upvalue limit. |
 | **merge** | Merges adjacent `local` statements (`local a=1 local b=2` becomes `local a,b=1,2`) when no initialiser reads an earlier name. |
-| **rename** | Locals (including parameters, loop variables and labels) and non-function globals get one- or two-character names, the most-referenced first. Names are reused where scopes don't overlap. **Not renamed:** function names (so tracebacks stay readable), table fields and methods, the implicit `self`, and every TIC-80/Lua global (see [Reserved names](#reserved-names)), and any variable marked with a `NOMINIFY` comment (below). |
+| **rename** | Locals (including parameters, loop variables and labels) and non-function globals get one- or two-character names, the most-referenced first. Names are reused where scopes don't overlap. **Not renamed:** function names (so tracebacks stay readable), table fields and methods, the implicit `self`, and every TIC-80/Lua global (see [Reserved names](#reserved-names)), and any variable kept by a `NOMINIFY` directive (below). |
 | layout | Every function definition starts a new line, at any depth. Otherwise tokens are packed into lines of at most 120 characters, breaking only between tokens. |
 
 Run `ticpak build -f --minify -o dist/` and read `dist/<name>.minify.txt` to see
 what each pass did to a given cart.
 
-### Keeping a name (NOMINIFY)
+### Opting out (NOMINIFY)
 
-To stop `rename` shortening a particular variable, put `NOMINIFY` (any case)
-anywhere in a comment on the line that **declares or assigns** it:
+The word `NOMINIFY` (any case, as a whole word: `nominifying` or `NOMINIFY_X`
+doesn't count) in a comment is a directive. It can keep a variable, a whole
+function, a whole module, the whole cart, or just the comment itself.
+
+A directive takes one of two forms:
+
+- **A comment block:** one or more comments, each on its own line. A blank
+  line or a line of code ends the block. If any of its comments holds the
+  word, the block is a directive.
+- **A comment after code** on the same line.
+
+What it keeps depends on what it is attached to. A block is attached to the
+statements that start on the line right after it. A comment after code is
+attached to the statements that start or end on its line. Then:
+
+| Attached to | What is kept |
+|---|---|
+| a `local`, an assignment (`x = …`, local or global), or a `for` loop | each variable it declares or assigns: its name, its declaration and its value |
+| a function: a `function` statement, a `local function`, a function value of a `local` or assignment, or any function whose `function` keyword is on that line | the whole function, byte for byte |
+| a module's top comment block | the whole module, byte for byte |
+| `main.lua`'s top comment block (its metadata header block) | the whole cart |
+| nothing of the above | the directive's own comment |
+
+#### Variables
 
 ```lua
 local player_speed = 3       -- tuning knob, NOMINIFY
-high_score = 0               --[[ read by the debugger: nominify ]]
+-- NOMINIFY: read by the debugger
+high_score = 0
 local enemy_count = 5
+local LIVES = 3              -- nominify: a constant, kept anyway
+-- NOMINIFY: music by A. Composer, CC BY 4.0
+
 function TIC()
-  local frame = player_speed + enemy_count + high_score
+  local frame = player_speed + enemy_count + high_score + LIVES
   frame = frame + 1          -- nominify  (an assignment marks it too)
+  trace(frame)
 end
 ```
 
-With `rename` on, `player_speed`, `high_score` and `frame` keep their names at
-every occurrence, and `enemy_count` becomes `a`. The comments are removed as
-usual:
+With `rename,constants`, `player_speed`, `high_score`, `LIVES` and `frame`
+keep their names at every occurrence. `LIVES` is not inlined either.
+`enemy_count` is inlined and removed. The comments that kept something are
+removed. The credit line, attached to nothing, is kept:
 
 ```lua
 local player_speed=3
 high_score=0
-local a=5
+local LIVES=3
+-- NOMINIFY: music by A. Composer, CC BY 4.0
 function TIC()
- local frame=player_speed+a+high_score
+ local frame=player_speed+5+high_score+LIVES
  frame=frame+1
+ trace(frame)
 end
 ```
 
-- **What counts:** a `local` declaration, a parameter or `for` variable, or an
-  assignment, on the marked line. A line that only *reads* the variable
-  marks nothing. Marking any one of a variable's declaration or assignment
-  lines keeps it everywhere.
-- **What doesn't:** `NOMINIFY` inside a string. A block comment counts for the
-  line it starts on.
-- **Only renaming is affected.** A marked constant can still be inlined by
-  `constants`, and a marked variable nothing uses can still be removed by
-  `extra`.
-- The report (`<name>.minify.txt`, from a folder build such as `-o dist/`)
-  lists every name kept this way under "names kept by a NOMINIFY comment",
-  with the marker's line.
+- **What counts:** a `local` declaration, an assignment to a plain name
+  (`t.x = …` assigns no variable), or a `for` loop's variables. Marking any
+  one of a variable's declaration or assignment statements keeps it
+  everywhere. A statement that only *reads* the variable marks nothing.
+- **A statement over several lines** can be marked after its first or its
+  last line: `local t = {` … `} -- NOMINIFY`.
+- **A kept variable is left alone by every option:** never renamed, never
+  inlined as a constant, never removed as unused, even with `extra`.
+- **What doesn't count:** `NOMINIFY` inside a string.
 
 Contract: [`minify-spec.md`](minify-spec.md) R8g.
 
-### Keeping a function or module verbatim (NOMINIFY)
+#### Functions and modules
 
-The same marker can keep a whole function, a whole module or the whole cart
-out of minification: no option touches it, so it comes out byte for byte,
-comments, spacing and names included.
-
-**A function** is kept when a comment containing `NOMINIFY` is on its
-declaration line, or in the comment block directly above or below that line:
+A kept function, module or cart comes out byte for byte: no option touches
+it, so its comments, spacing and names stay as written.
 
 ```lua
 local function draw_hud(x, y) -- NOMINIFY: on the declaration line
@@ -136,18 +151,17 @@ function debug_overlay()
   ...
 end
 
-function tuned_curve(t)
-  -- NOMINIFY: the comment block directly below the declaration
+local function tuned_curve(t)
   return t * t * (3 - 2 * t)
-end
+end -- NOMINIFY: on the line that closes it
 
 local ease = function(t) -- NOMINIFY: function expressions work too
   ...
 end
 ```
 
-**A module** is kept when the comment block at its top holds a `NOMINIFY`.
-In a bundle that is the first comment lines of the module file:
+**A module** is kept when the comment block at its top holds the word. In a
+bundle that is the first comment lines of the module file:
 
 ```lua
 -- physics: NOMINIFY - ship this module exactly as written
@@ -155,15 +169,17 @@ local M = {}
 ...
 ```
 
+A directive above a module's `package.preload` line (in a bundle, a block
+above `main.lua`'s `require`) doesn't keep the module. Only the module's
+own top block does.
+
 **The whole cart** is kept when `main.lua`'s top comment block, its metadata
 header block, holds a `NOMINIFY` comment line. The header tags' own values,
 such as a title that happens to contain the word, don't count.
 
-Rules:
-
-- **A blank line ends a comment block.** A `NOMINIFY` comment, then a blank
-  line, then a function does not protect the function. At a module's top it
-  is a module-level directive; anywhere else it protects nothing.
+- **A directive inside a body applies to the statement after it, not to the
+  function.** A block in the first lines of a function body keeps the
+  variable declared below it, or else itself. It does not keep the function.
 - **Module level wins.** A module's top block that runs straight into a
   function declaration could be read either way; the whole module is kept.
   Anything protected inside something else protected is simply part of it.
@@ -177,12 +193,46 @@ Rules:
   removed as unused either, even with `extra`.
 - **Exactly what is kept:** the parameter list and body, from `(` to `end`.
   `local function name` and `function name` in front of it are emitted as
-  usual. The directive comment itself goes like any other comment, unless it
-  is inside the body.
-- The report lists every kept function and module under "functions and
-  modules kept verbatim by a NOMINIFY comment", with the line each starts on.
+  usual. The directive comment itself is removed like any other comment,
+  unless it is inside the body.
 
 Contract: [`minify-spec.md`](minify-spec.md) R8h.
+
+#### Comments
+
+A directive that keeps no variable, function or module keeps its own
+comment instead: a block followed by a blank line, or one above a call, an
+`if`, a `return` or the end of a block, or a comment after such code. Use it
+for credits, licence notices or notes that should ship with the cart.
+
+```lua
+-- NOMINIFY: (c) 2026 A. Author - MIT License
+
+draw_title()  -- NOMINIFY: the title must stay first
+```
+
+- The whole block is kept, all of its lines, with their text and their own
+  line breaks. A block that had its own lines keeps them. A comment that
+  followed code stays at the end of that code's line.
+- Code after a kept comment always starts a new line, with `whitespace` too.
+- A kept comment between table fields stays there. Anywhere else inside an
+  expression (between a call's arguments, say) it moves to after the end of
+  the statement around it.
+- It goes with the code around it: a kept comment inside an unused function
+  that `extra` removes is removed too.
+- A kept comment line that starts `-- <` stops the build. TIC-80 would read
+  it as the start of the asset sections.
+- In a cart, a `NOMINIFY` block after the metadata header block (and after
+  the last metadata tag) starts the code, so it is kept too. At the very
+  top of a module file, though, a `NOMINIFY` block keeps the whole module:
+  put a module's credit line below its first statement.
+
+Contract: [`minify-spec.md`](minify-spec.md) R8i.
+
+The report (`<name>.minify.txt`, from a folder build such as `-o dist/`)
+lists everything kept this way, with its line: "functions and modules kept
+verbatim by a NOMINIFY comment", "names kept by a NOMINIFY comment" and
+"comments kept by NOMINIFY".
 
 ### Whole-program assumptions
 
@@ -236,7 +286,8 @@ A folder build (`ticpak build -o dist/`) with any `--minify=` option past
   - the names aliased;
   - the UPPER_CASE names that are **not** constants, with the reason (for
     example `BANK: value is not a constant scalar (table)`);
-  - the globals that are never written.
+  - the globals that are never written;
+  - the functions, modules, names and comments kept by `NOMINIFY`.
 - **`dist/<name>.minify.json`**, for decoding an error from the packaged cart:
   - `"lines"` maps each output line to the source file and line of its first
     token (TIC-80 reports `[string "…"]:37:`, so look up `"37"`);
@@ -296,8 +347,7 @@ minify.minify(module_src, whole_program=False)          # fragment
 
 TIC-80's own loader is less strict. So an unminified wavynavy bundle (no
 `--minify`) would fail to boot, because it still contains that comment; any
-minify option strips comments, so it is unaffected. Since 2026-10-03
-`ticpak` checks for such a line before booting and stops, naming its source
+minify option strips comments, so it is unaffected. `ticpak` checks for such a line before booting and stops, naming its source
 line (`a2boot.lua:14`).
 
 ## Reserved names
@@ -334,7 +384,8 @@ python tests/options/test_options.py   # every option combination
   sets) on sample carts with assets in several layouts. For each, it checks
   structure, that the metadata header and assets come through byte-identical,
   each option's effect on and off, and identical behaviour under Lua 5.3
-  against a logging TIC-80 stand-in. It also covers sizes, NOMINIFY and
+  against a logging TIC-80 stand-in. It also covers sizes, every NOMINIFY
+  directive (variables, functions, modules, the whole cart, kept comments) and
   `ticpak.bundle()`. Opt-in, it boots every set's bundle in TIC-80
   (`TICPAK_BOOT=1`, about 3 minutes). Details:
   [tests/options/README.md](../tests/options/README.md).

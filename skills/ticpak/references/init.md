@@ -159,11 +159,15 @@ available:
   switches off every pass that touches globals. The `.minify.txt` report names
   the line that caused it.
 - **Mark names something reads as strings.** If a debugger, another cart or a
-  string lookup needs a variable's real name, put `NOMINIFY` in a comment on
-  the line that declares or assigns it. A `NOMINIFY` comment on a function's
-  declaration line, or in the comment block directly above it, keeps the whole
+  string lookup needs a variable's real name, put a `NOMINIFY` comment
+  directly above its `local` or assignment, or after it on the same line. The
+  variable then keeps its name, declaration and value. A `NOMINIFY` comment
+  directly above a function, or after its first or last line, keeps the whole
   function byte for byte. In a module's top comment block it keeps the whole
-  module.
+  module. A `NOMINIFY` comment anywhere else (followed by a blank line, or
+  above a call) keeps just itself, for credits or licence lines. A blank
+  line ends a comment block, and the word must stand alone (`NOMINIFY_X`
+  doesn't count). A kept comment line must not start `-- <`.
 - Function names, table fields, methods and every TIC-80/Lua global are never
   renamed. Tracebacks stay readable, and `obj.field` access is always safe.
 

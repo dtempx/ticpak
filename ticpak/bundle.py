@@ -246,6 +246,11 @@ def bundle(t, minify_options=frozenset()):
 
     try:
         res = minifier.minify_cart_ex(out, mode=minify_options, meta_keys=META_KEYS)
+    except minifier.NominifyError as e:      # name the source file and line
+        n = e.line
+        where = (f"{origin[n - 1][0]}:{origin[n - 1][1]}"
+                 if 0 < n <= len(origin) and origin[n - 1][0] else f"bundle line {n}")
+        sys.exit(f"bundle: {where}: {e.msg}")
     except ValueError as e:
         sys.exit(f"bundle: {e}")
     out = res.text

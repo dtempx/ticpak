@@ -10,12 +10,12 @@ subsets; since every option but `comments` implies it, they collapse to 17
 distinct effective sets, and each runs on each cart in samples/ (built by
 make_samples.py) and on the ticpak project in project/. Per combination:
 
-  OptionParsing  empty set, `max` alias, old presets rejected, implied
+  OptionParsing  empty set, `max` alias, unknown names rejected, implied
                  `comments`, raw subset == its effective set
   CommandLine        --minify absent = none, bare = all, =a,b = those only;
-                 presets and --no-minify rejected; a path after --minify hinted;
-                 -m, -o/--out, -f/--force, --verbose, -v/--version; `rebuild`,
-                 `check -f`, --no-check, --output and -n with -o FILE rejected
+                 preset names rejected; a path after --minify hinted;
+                 -m, -o/--out, -f/--force, --verbose, -v/--version;
+                 `check -f` and -n with -o FILE rejected
   Outputs        -o NAME.tic / NAME.lua / folder and the default <name>.tic
                  beside main.lua; cart vs module; a bad SOURCE; the
                  interactive output questions and the rerun hint
@@ -33,12 +33,16 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  the logs must be identical, value types included
   Sizes          adding an option never makes the code longer; `whitespace`
                  never adds lines
-  Nominify       NOMINIFY-marked names survive `rename` (spec R8g)
+  Nominify       NOMINIFY-kept variables (spec R8g): marked after or above
+                 their statement; never renamed, inlined or removed
   NominifyFunctionsAndModules  function- and module-level NOMINIFY (R8h):
-                 same line / block above / block below a declaration, nested
-                 and unused functions, a module's top block, module level
-                 winning, a blank line ending a block, the whole cart; bodies
-                 byte for byte under every option set, used names pinned
+                 same line / block above / closing line of a declaration,
+                 nested and unused functions, a block in a body keeping only
+                 itself, a module's top block, module level winning, a blank
+                 line ending a block, the whole cart; bodies byte for byte
+                 under every option set, used names pinned
+  NominifyComments  comments a directive keeps (R8i): where they may sit,
+                 moved out of a call, removed with unused code, `-- <` stops
   Bundle         the project bundled by bundle.bundle() for every set behaves
                  like the unminified bundle, keeps its assets and header
   BundleAssets   every asset layout (and CRLF) survives bundle.bundle(); no
@@ -138,15 +142,24 @@ def protected(name):
     return [code[a:b] for a, b in M.nominify_regions(code)]
 
 
+def kept_comments(name):
+    """The comments a NOMINIFY directive keeps in a sample's code (spec R8i).
+    (top=False: a cart's top block is its header, not the code's.)"""
+    return [c[3] for c in M.directives(code_of(SAMPLES[name]), top=False).comments]
+
+
 def whole_cart_kept(name):
     """Does the sample's top comment block turn minification off?"""
     return minified(name, M.ALL_OPTIONS).text == SAMPLES[name]
 
 
 def without_protected(name, code):
-    """code with every protected body cut out (they keep their comments)."""
+    """code with every protected body and kept comment cut out (they keep
+    their comments)."""
     for body in protected(name):
         code = code.replace(body, "(...)end")
+    for text in kept_comments(name):
+        code = code.replace(text, "")
     return code
 
 
@@ -233,7 +246,6 @@ class TestOptionParsing(unittest.TestCase):
         self.assertEqual(M.parse_options(["constants"]), {"comments", "constants"})
 
     def test_unknown_rejected(self):
-        # the old presets are gone too
         for bad in ("bogus", "dead", "fold", "comments,unused", "Rename",
                     "default", "all", "none"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
@@ -259,7 +271,7 @@ class TestOptionParsing(unittest.TestCase):
 
 class TestCommandLine(unittest.TestCase):
     """ticpak's command line: --minify absent = none, bare = all, =a,b =
-    those only; -f/--force, --verbose and -v/--version; `rebuild` gone."""
+    those only; -f/--force, --verbose and -v/--version."""
 
     def parse(self, *argv):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -290,7 +302,7 @@ class TestCommandLine(unittest.TestCase):
     def test_rejected(self):
         for argv in (["--minify=all"], ["--minify=default"], ["--minify=none"],
                      ["--minify=max"], ["--minify=rename,bogus"], ["--minify="],
-                     ["--no-minify"], ["--minify", "src/main.lua"]):
+                     ["--minify", "src/main.lua"]):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.parse(*argv)
 
@@ -323,11 +335,9 @@ class TestCommandLine(unittest.TestCase):
             self.assertEqual(e.exception.code, 0)
             self.assertIn("ticpak ", out.getvalue())
 
-    def test_rebuild_and_check_force_rejected(self):
-        for argv in (["check", "-f"], ["build", "--no-check"],
-                     ["build", "--output", "x"]):
-            with self.subTest(argv=argv), self.assertRaises(SystemExit):
-                self.parse(*argv)
+    def test_check_force_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.parse("check", "-f")
 
     def test_name_with_file_out_rejected(self):
         for out in ("x.tic", "x.lua", "a/X.TIC"):
@@ -549,7 +559,7 @@ class TestOptionEffects(unittest.TestCase):
             with self.subTest(sample=name):
                 code_in = code_of(SAMPLES[name])
                 code_out = code_of(minified(name, frozenset({"comments"})).text)
-                keep = M.nominify_regions(code_in)
+                keep = M.directives(code_in, top=False).keep()
                 if whole_cart_kept(name):
                     self.assertEqual(minified(name, frozenset({"comments"})).text, SAMPLES[name])
                     continue
@@ -614,6 +624,8 @@ class TestOptionEffects(unittest.TestCase):
                 continue
             with self.subTest(sample=name, opts=label(opts)):
                 for line in code_of(minified(name, opts).text).split("\n"):
+                    for text in kept_comments(name):   # a kept comment may run past
+                        line = line.replace(text.split("\n")[0], "")
                     if len(line) > 120:              # only one unsplittable token
                         self.assertEqual(len(M.lex(line)), 1, line[:60])
 
@@ -675,20 +687,37 @@ class TestSizes(unittest.TestCase):
 
 
 class TestNominify(unittest.TestCase):
-    def test_marker_lines(self):
+    KEPT = {"keepme_speed", "keepme_lives", "keepme_later", "keepme_above",
+            "keepme_global_above", "keepme_const", "keepme_unused", "keepme_table",
+            "keepme_i"}
+
+    def test_directive_names(self):
+        """The marked declarations and assignments, and nothing else: not the
+        string, not "nominifying"."""
         code = code_of(SAMPLES["nominify"])
-        marked = {i + 1 for i, line in enumerate(code.split("\n"))
-                  if re.search(r"--.*nominify", line, re.I)}
-        self.assertEqual(M.nominify_lines(code), marked)
-        self.assertEqual(len(marked), 3)            # the string one is not a marker
+        self.assertEqual({n for _, n in M.directives(code).names}, self.KEPT)
+        self.assertEqual(M.directives(code).comments, [])
 
     def test_kept_names_reported(self):
-        r = minified("nominify", M.parse_options("rename"))
-        self.assertEqual({n for n, _ in r.report.nominify},
-                         {"keepme_speed", "keepme_lives", "keepme_later"})
-        out = code_of(r.text)
-        self.assertNotIn("renameme_marker_in_string", out)
-        self.assertNotRegex(out, re.compile("nominify --|-- *nominify", re.I))
+        for opts in (M.parse_options("rename"), M.ALL_OPTIONS):
+            with self.subTest(opts=label(opts)):
+                r = minified("nominify", opts)
+                self.assertEqual({n for n, _ in r.report.nominify}, self.KEPT)
+                out = code_of(r.text)
+                self.assertNotIn("renameme_marker_in_string", out)
+                self.assertNotIn("renameme_longer_word", out)
+                self.assertNotRegex(out, re.compile("--.*nominify", re.I))   # no comment kept
+
+    def test_not_inlined_or_removed(self):
+        """A kept variable keeps its declaration and value: `constants` does
+        not inline keepme_const, `extra` does not remove keepme_unused."""
+        for opts in EFFECTIVE:
+            if not opts:
+                continue
+            with self.subTest(opts=label(opts)):
+                out = code_of(minified("nominify", opts).text)
+                self.assertEqual(len(re.findall(r"\bkeepme_const\b", out)), 2)  # declared, read
+                self.assertIn("keepme_unused", out)
 
 
 class TestNominifyFunctionsAndModules(unittest.TestCase):
@@ -700,12 +729,23 @@ class TestNominifyFunctionsAndModules(unittest.TestCase):
 
     def test_function_regions(self):
         bodies = protected("nominify_funcs")
-        self.assertEqual(len(bodies), 6)       # same line, above, below, expression,
-        for b in bodies:                       # unused, nested - one each
+        self.assertEqual(len(bodies), 6)       # same line, above, closing line,
+        for b in bodies:                       # expression, unused, nested - one each
             self.assertTrue(b.startswith("(") and b.endswith("end"), b[:30])
         joined = "".join(bodies)
         self.assertNotIn("this comment is removed", joined)   # blank line ends the block
         self.assertNotIn("removed with the outer", joined)    # outer function not protected
+        self.assertNotIn("KEPT_BELOW", joined)     # a block in the body: not the function
+
+    def test_comment_in_body_kept_alone(self):
+        """minfn_below's NOMINIFY block, above its return, keeps itself only."""
+        kept = kept_comments("nominify_funcs")
+        self.assertEqual(len(kept), 2)             # that one, and the one before a blank
+        self.assertIn("KEPT_BELOW", kept[0])
+        for opts, out in self.outputs("nominify_funcs"):
+            with self.subTest(opts=label(opts)):
+                for text in kept:
+                    self.assertIn(text, out)
 
     def test_functions_verbatim(self):
         bodies = protected("nominify_funcs")
@@ -776,6 +816,58 @@ class TestNominifyFunctionsAndModules(unittest.TestCase):
             for b in protected(name):
                 with self.subTest(sample=name, body=b[:30]):
                     self.assertIn(b, out)
+
+
+class TestNominifyComments(unittest.TestCase):
+    """Comments a NOMINIFY directive keeps (spec R8i): every KEPT_ comment
+    comes out under every option set but none; the code around them still
+    minifies; one inside a call moves after it; one in removed code goes."""
+
+    def test_found(self):
+        kept = kept_comments("nominify_comments")
+        self.assertEqual([re.search(r"KEPT_\w+", t).group() for t in kept],
+                         ["KEPT_1", "KEPT_2", "KEPT_3", "KEPT_4", "KEPT_5", "KEPT_6",
+                          "KEPT_7", "KEPT_UNLESS_EXTRA"])
+
+    def test_kept_under_every_set(self):
+        for opts in EFFECTIVE:
+            if not opts:
+                continue
+            with self.subTest(opts=label(opts)):
+                out = code_of(minified("nominify_comments", opts).text)
+                for text in kept_comments("nominify_comments"):
+                    if "UNLESS_EXTRA" in text and "extra" in opts:
+                        self.assertNotIn(text, out)
+                    else:
+                        self.assertIn(text, out)
+                self.assertNotIn("GONE_", out)
+                if "rename" in opts:
+                    self.assertNotRegex(out, r"\brenameme_")
+                r = minified("nominify_comments", opts)
+                if r.report is not None:
+                    self.assertEqual(len(r.report.comments), 7 if "extra" in opts else 8)
+
+    def test_moved_out_of_call(self):
+        """KEPT_6 sits between a call's arguments: it goes after the call,
+        at the end of that line."""
+        for opts in (M.parse_options("rename"), M.ALL_OPTIONS):
+            with self.subTest(opts=label(opts)):
+                out = code_of(minified("nominify_comments", opts).text)
+                self.assertRegex(out, r"2\) -- NOMINIFY KEPT_6")
+
+    def test_tag_line_stops(self):
+        """A kept comment line starting `-- <` would cut the code in TIC-80."""
+        src = "local a = 1\n-- NOMINIFY\n-- <MAP> notes\n\ntrace(a)\n"
+        for opts in ("comments", "comments,rename"):
+            with self.subTest(opts=opts):
+                with self.assertRaises(M.NominifyError) as e:
+                    M.minify_ex(src, opts)
+                self.assertEqual(e.exception.line, 3)
+
+    def test_whole_word(self):
+        src = "local a = 1 -- nominifying\nlocal b = 2 -- NOMINIFY_X\ntrace(a, b)\n"
+        self.assertEqual(M.directives(src).names, frozenset())
+        self.assertEqual(M.directives(src).comments, [])
 
 
 class TestBundle(unittest.TestCase):

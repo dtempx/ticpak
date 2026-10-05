@@ -2,8 +2,7 @@
 """Lua 5.3 minifier for TIC-80 carts -- the minification stage of ticpak.
 
 ticpak's bundle imports it to shrink the amalgamated cart; `ticpak minify`
-runs it on its own. (History: it replaced luamin53.py on 2026-10-02 and was
-called ticminify.py until ticpak got its own repo on 2026-10-04.)
+runs it on its own.
 
 Options (docs/minify.md has usage, docs/minify-spec.md the contract), combined as
 a set - `comments,rename`; an empty set is a passthrough:
@@ -216,6 +215,8 @@ def lex_lines(s, offsets=None):
 
 def _needs_space(pk, pt, kind, text):
     """True when omitting whitespace between two tokens would re-lex differently."""
+    if kind == "comment":             # a kept comment: kept apart from the code before it
+        return True
     if kind == "raw":                 # a protected body starts with "(": never needs one
         return False
     if pk == "raw":                   # ... and ends with `end`
@@ -286,7 +287,8 @@ def strip_comments(s, keep=()):
     is dropped, whitespace before a comment that ends its line goes with it,
     and a block comment between two tokens becomes one space. Strings - long
     ones included - are copied byte for byte, and so is every (start, end)
-    span in keep (NOMINIFY-protected function bodies, sorted)."""
+    span in keep (NOMINIFY-protected function bodies and kept comments,
+    sorted: Directives.keep())."""
     out, i, n = [], 0, len(s)
     keep, k = list(keep), 0
 
@@ -345,20 +347,27 @@ def strip_comments(s, keep=()):
 def layout_lines(toks):
     """Keep the source's line breaks: an output line starts wherever a token
     comes from a later source line than the one before it, indented one space
-    per block level. Returns (text, first source line of each output line)."""
-    toks3, firsts, prev = [], [], None
+    per block level. Returns (text, first source line of each output line).
+    A kept comment that had its own line(s) gets them again; one that
+    followed code stays at the end of that line; code after it starts a new
+    line."""
+    toks3, firsts, prev, after_comment = [], [], None, False
     for kind, text, line in toks:
         if kind == "nl":
             continue
-        brk = prev is not None and line > prev
+        brk = prev is not None and (line > prev or after_comment
+                                    or (kind == "comment" and text.own_line))
         if prev is None or brk:
-            firsts.append(line)
+            # (a token's line can be its statement's - an `if`'s `end` - so
+            # the line after a comment maps to a line after the comment)
+            firsts.append(max(line, prev + 1) if after_comment else line)
         toks3.append((kind, text, brk))
         prev = line if prev is None else max(prev, line)
-        if kind == "raw":             # a protected body: its own lines, verbatim
+        if kind in ("raw", "comment"):    # verbatim text: its own lines too
             nl = text.count("\n")
             firsts.extend(range(line + 1, line + nl + 1))
             prev = max(prev, line + nl)
+        after_comment = kind == "comment"
     return emit_readable(toks3), firsts
 
 
@@ -373,9 +382,33 @@ class RawText(str):
         return s
 
 
+class CommentText(str):
+    """A comment block a NOMINIFY directive keeps (spec R8i), as the text of
+    one "comment" token: the source from its first comment's `--` to the end
+    of its last comment. own_line: it had its own line(s) in the source (a
+    comment block), rather than following code."""
+
+    def __new__(cls, text, own_line):
+        s = super().__new__(cls, text)
+        s.own_line = own_line
+        return s
+
+
+class NominifyError(ValueError):
+    """A NOMINIFY directive that cannot be honoured; line is a source line."""
+
+    def __init__(self, line, msg):
+        super().__init__(f"line {line}: {msg}")
+        self.line, self.msg = line, msg
+
+
+NOMINIFY_RE = re.compile(r"\bnominify\b", re.I)
+TAG_LINE_RE = re.compile(r"-- <[A-Za-z]")     # TIC-80 reads it as an asset section
+
+
 def _scan_comments(src):
-    """([(start line, end line, text)] of every comment, {lines holding code}).
-    Strings count as code on every line they span."""
+    """([(start line, end line, text, start, end)] of every comment, {lines
+    holding code}). Strings count as code on every line they span."""
     comments, code = [], set()
     i, n, line = 0, len(src), 1
     while i < n:
@@ -392,8 +425,8 @@ def _scan_comments(src):
             else:
                 nl = src.find("\n", i)
                 end = n if nl < 0 else nl
-            text = src[i:end]
-            comments.append((line, line + text.count("\n"), text))
+            text = src[i:end].rstrip("\r")
+            comments.append((line, line + text.count("\n"), text, i, i + len(text)))
             line += text.count("\n"); i = end; continue
         lb = long_bracket(src, i)
         if lb:
@@ -412,42 +445,43 @@ def _scan_comments(src):
     return comments, code
 
 
-class _Lines:
-    """Per-line facts for the NOMINIFY directives: which lines are comment
-    only, which carry a NOMINIFY comment, which are blank."""
+def _comment_blocks(src):
+    """(blocks, trailing, code lines, blank(l)). A block is a run of comments
+    each starting on its own line, ended by a blank line or code: [comment,
+    ...] with comments as _scan_comments gives them. trailing: the comments
+    that follow code on their line."""
+    comments, code = _scan_comments(src)
+    text = src.split("\n")
 
-    def __init__(self, src):
-        comments, self.code = _scan_comments(src)
-        self.text = src.split("\n")
-        self.comment, self.nomi = set(), set()
-        for a, b, text in comments:
-            lines = range(a, b + 1)
-            self.comment.update(l for l in lines if l not in self.code)
-            if NOMINIFY_RE.search(text):
-                self.nomi.update(lines)
+    def blank(l):
+        return 1 <= l <= len(text) and l not in code and not text[l - 1].strip()
 
-    def blank(self, l):
-        return (1 <= l <= len(self.text) and l not in self.code
-                and l not in self.comment and not self.text[l - 1].strip())
+    blocks, trailing = [], []
+    for c in comments:
+        if c[0] in code:
+            trailing.append(c)
+        elif (blocks and blocks[-1][-1][1] not in code
+              and c[0] <= blocks[-1][-1][1] + 1):
+            blocks[-1].append(c)
+        else:
+            blocks.append([c])
+    return blocks, trailing, code, blank
 
-    def block_has_nomi(self, l, step, skip_blank=False):
-        """Does the comment block starting at line l (walking by step: -1
-        upwards, 1 downwards) hold a NOMINIFY? A blank line or code ends it;
-        skip_blank first skips blank lines (a module's top block)."""
-        if skip_blank:
-            while self.blank(l):
-                l += step
-        while l in self.comment:
-            if l in self.nomi:
-                return True
-            l += step
-        return False
+
+def _has_nomi(comments):
+    return any(NOMINIFY_RE.search(c[2]) for c in comments)
 
 
 def top_block_nominify(src):
     """Is there a NOMINIFY in the source's top comment block (after any
     leading blank lines)? Then the whole module is left alone (spec R8h)."""
-    return _Lines(src).block_has_nomi(1, 1, skip_blank=True)
+    if not NOMINIFY_RE.search(src):
+        return False
+    blocks, _, code, blank = _comment_blocks(src)
+    l = 1
+    while blank(l):
+        l += 1
+    return bool(blocks) and blocks[0][0][0] == l and _has_nomi(blocks[0])
 
 
 def _is_preload(toks, i):
@@ -456,50 +490,166 @@ def _is_preload(toks, i):
             and toks[i - 3][0] == "string" and [t[1] for t in toks[i - 2:i]] == ["]", "="])
 
 
+class Directives:
+    """What a source's NOMINIFY comments ask for (spec R8g-R8i).
+
+    regions:  (start, end) offsets of the protected function bodies, from
+              "(" to the end of "end", outermost only
+    names:    {(line, name)}: the variables declared or assigned there keep
+              their names, declarations and values
+    comments: [(start, end, at, text)]: the comment blocks kept in the
+              output; at is the index of the token they go before
+    """
+
+    def __init__(self, regions=(), names=frozenset(), comments=()):
+        self.regions, self.names, self.comments = list(regions), names, list(comments)
+
+    def keep(self):
+        """Every span copied verbatim: the regions and the kept comments."""
+        return sorted(self.regions + [c[:2] for c in self.comments])
+
+
+def _targets(stmts, funcs, modules):
+    """What a directive on these statements does: (functions to protect,
+    {(line, name)} to keep). A module (in modules, by id) is protected only
+    by its own top block, never by a directive above its preload line."""
+    prot, names = [f for f in funcs if id(f) not in modules], set()
+    for s in stmts:
+        t = type(s)
+        if t in (LocalFunc, FuncStat):
+            prot.append(s.func)
+        elif t in (Local, Assign):
+            prot.extend(e for e in s.exprs if type(e) is Func and id(e) not in modules)
+            ns = s.names if t is Local else [tg for tg in s.targets if type(tg) is Name]
+            names.update((n.line, n.name) for n in ns)
+        elif t is NumFor:
+            names.add((s.var.line, s.var.name))
+        elif t is GenFor:
+            names.update((n.line, n.name) for n in s.names)
+    return prot, names
+
+
+def directives(src, top=True):
+    """Find the source's NOMINIFY directives (spec R8g-R8i). A directive is a
+    comment block holding NOMINIFY (any case, as a word), or a comment
+    containing it that follows code on its line.
+
+    - A block at the top of a `package.preload` module protects the module.
+      With top, one at the top of the source is the caller's to act on (it
+      leaves it all alone: top_block_nominify) and is skipped here.
+    - A block applies to the statements that start on the line after it (or
+      on its last line, when code follows the block there); a comment after
+      code to the statements that start or end on its line. Each function
+      among them (a function statement, `local function`, or a function value
+      of `local`/assignment), and each function whose `function` keyword is
+      on that line, is protected: kept byte for byte. Each variable a `local`,
+      assignment or `for` among them declares or assigns is kept: its name,
+      declaration and value (Info pins it).
+    - A directive that keeps nothing that way keeps its own comment, placed
+      between statements or table fields (else after the statement around it).
+    - Raises NominifyError for a kept comment line TIC-80 would read as an
+      asset section tag.
+    """
+    if not NOMINIFY_RE.search(src):
+        return Directives()
+    blocks, trailing, code, blank = _comment_blocks(src)
+    offs = []
+    toks = lex_lines(src, offs)
+    p = Parser(toks)
+    p.marks, p.seen, p.funcs = set(), [], []
+    p.chunk()
+    line_of = lambda i: toks[i][2] if i < len(toks) else (toks[-1][2] if toks else 1)
+    starts, ends, kw_on = {}, {}, {}
+    for a, b, s in p.seen:
+        starts.setdefault(line_of(a), []).append(s)
+        ends.setdefault(line_of(b - 1), []).append(s)
+    for f in p.funcs:
+        kw_on.setdefault(line_of(f.kw), []).append(f)
+
+    protect_f, names, kept = [], set(), []
+    used = set()                                # blocks consumed as module directives
+    modules = {id(f) for f in p.funcs if _is_preload(toks, f.kw)}
+    for f in p.funcs:
+        if id(f) in modules:
+            l = line_of(f.kw) + 1
+            while blank(l):
+                l += 1
+            for k, blk in enumerate(blocks):
+                if blk[0][0] == l:
+                    if _has_nomi(blk):
+                        protect_f.append(f); used.add(k)
+                    break
+    l = 1
+    while blank(l):
+        l += 1
+    if top and blocks and blocks[0][0][0] == l:
+        used.add(0)                             # the top block: top_block_nominify's
+    for k, blk in enumerate(blocks):
+        if k in used or not _has_nomi(blk):
+            continue
+        last = blk[-1][1]
+        tl = last if last in code else last + 1 if last + 1 in code else None
+        prot, nm = (_targets(starts.get(tl, ()), kw_on.get(tl, ()), modules) if tl
+                    else ([], set()))
+        protect_f += prot; names |= nm
+        if not prot and not nm:
+            kept.append((blk[0][3], blk[-1][4], blk[0][0], True))
+    for c in trailing:
+        if not NOMINIFY_RE.search(c[2]):
+            continue
+        l = c[0]
+        stmts = starts.get(l, []) + [s for s in ends.get(l, ()) if s not in starts.get(l, ())]
+        prot, nm = _targets(stmts, kw_on.get(l, ()), modules)
+        protect_f += prot; names |= nm
+        if not prot and not nm:
+            kept.append((c[3], c[4], c[0], False))
+
+    regions = []
+    for a, b in sorted({(offs[f.toks[0]], offs[f.toks[1]] + len("end")) for f in protect_f}):
+        if not regions or a >= regions[-1][1]:   # outermost only: module level wins
+            regions.append((a, b))
+    comments = []
+    for a, b, line, own in sorted(kept):
+        if any(ra <= a < rb for ra, rb in regions):
+            continue                            # inside protected code: verbatim already
+        text = src[a:b]
+        for i, ln in enumerate(text.split("\n")):
+            if TAG_LINE_RE.match(ln.lstrip() if i == 0 else ln):
+                raise NominifyError(line + i, "a comment kept by NOMINIFY has a line starting"
+                                    " `-- <`, which TIC-80 reads as the start of the asset"
+                                    " sections - reword that line")
+        at = bisect.bisect_left(offs, b)
+        if at not in p.marks:
+            # not between statements or table fields: after the innermost
+            # statement around it instead, at the end of that line
+            around = [(sa, sb) for sa, sb, _ in p.seen if sa < at < sb]
+            at, own = max(around)[1], False
+        comments.append((a, b, at, CommentText(text, own)))
+    return Directives(regions, frozenset(names), comments)
+
+
 def nominify_regions(src):
     """(start, end) offsets of every NOMINIFY-protected function body, from
-    its "(" to the end of its "end", outermost only (spec R8h). A function is
-    protected when a comment containing NOMINIFY is on its declaration line,
-    or in the comment block directly above or below that line; a module (the
-    body of `package.preload["m"] = function(...)`) when it is in the module's
-    top comment block. A blank line ends a comment block."""
-    if "nominify" not in src.lower():
-        return []
-    lines = _Lines(src)
-    offs = []
-    toks = lex(src, offsets=offs)
-    nl = [i for i, ch in enumerate(src) if ch == "\n"]
-    spans = []
-    for i, tk in enumerate(toks):
-        if tk != ("keyword", "function"):
-            continue
-        p = i + 1
-        while toks[p] != ("op", "("):
-            p += 1
-        depth, j = 1, p
-        while depth:
-            j += 1
-            if toks[j][0] == "keyword":
-                if toks[j][1] in ("function", "if", "do", "repeat"):
-                    depth += 1
-                elif toks[j][1] in ("end", "until"):
-                    depth -= 1
-        line = bisect.bisect_left(nl, offs[i]) + 1
-        hit = (line in lines.nomi or lines.block_has_nomi(line - 1, -1)
-               or lines.block_has_nomi(line + 1, 1))
-        if not hit and _is_preload(toks, i):
-            hit = lines.block_has_nomi(line + 1, 1, skip_blank=True)
-        if hit:
-            spans.append((offs[p], offs[j] + len("end")))
-    out = []
-    for a, b in sorted(spans):                  # outermost only: module level wins
-        if not out or a >= out[-1][1]:
-            out.append((a, b))
-    return out
+    its "(" to the end of its "end", outermost only (spec R8h)."""
+    return directives(src).regions
 
 
-def protect(src, toks, offs, spans):
-    """Collapse each protected body's tokens into one ("raw", RawText, line)."""
+def protect(src, toks, offs, nomi):
+    """Put each kept comment in the token stream as ("comment", CommentText,
+    line), and collapse each protected body's tokens into one ("raw",
+    RawText, line)."""
+    if nomi.comments:
+        at = {}
+        for c in nomi.comments:
+            at.setdefault(c[2], []).append(c)
+        t2, o2 = [], []
+        for i in range(len(toks) + 1):
+            for a, b, _, text in at.get(i, ()):
+                t2.append(("comment", text, src.count("\n", 0, a) + 1)); o2.append(a)
+            if i < len(toks):
+                t2.append(toks[i]); o2.append(offs[i])
+        toks, offs = t2, o2
+    spans = nomi.regions
     if not spans:
         return toks
     out, i, k = [], 0, 0
@@ -547,6 +697,7 @@ class Func:
         s.params, s.vararg, s.body, s.line, s.end_line = params, vararg, body, line, end_line
         s.is_method, s.chunk, s.upvals, s.self_b = is_method, None, set(), None
         s.raw, s.raw_bindings = None, []      # NOMINIFY: the body's exact source (RawText)
+        s.kw = s.toks = None                  # token indices: `function`, ("(", "end")
 class Table:          # fields: [kind, key, value, sep]; kind pos|named|index
     def __init__(s, fields, line): s.fields, s.line = fields, line
 
@@ -586,6 +737,8 @@ class Label:
     def __init__(s, name, line): s.name, s.line = name, line
 class Semi:
     def __init__(s, line): s.line = line
+class Comment:        # a comment kept by NOMINIFY (CommentText); also a table field's key
+    def __init__(s, text, line): s.text, s.line = text, line
 
 EOF_TOK = ("eof", "<eof>", 0)
 BINPRI = {"or": (1, 1), "and": (2, 2),
@@ -602,6 +755,10 @@ class Parser:
 
     def __init__(self, toks):
         self.t, self.i, self.n = toks, 0, len(toks)
+        # directives() sets these to record where a kept comment may go
+        # (marks: token indices between statements or table fields), every
+        # statement's (start, end) token span (seen) and every function (funcs)
+        self.marks = self.seen = self.funcs = None
 
     def tok(self):
         return self.t[self.i] if self.i < self.n else EOF_TOK
@@ -615,6 +772,8 @@ class Parser:
 
     def err(self, msg):
         t = self.tok()
+        if t[0] == "comment":                  # directives() places them where they parse
+            raise AssertionError(f"minify: kept NOMINIFY comment misplaced at line {t[2]}")
         raise LuaSyntaxError(f"line {t[2]}: {msg} near {t[1]!r}")
 
     def expect(self, text):
@@ -635,23 +794,38 @@ class Parser:
             self.err("'<eof>' expected")
         return b
 
+    def comments(self, out):
+        """Take the kept-comment tokens here, appending a Comment for each."""
+        while self.tok()[0] == "comment":
+            t = self.take()
+            out.append(Comment(t[1], t[2]))
+
     def block(self):
         stmts = []
         while True:
+            if self.marks is not None: self.marks.add(self.i)
+            self.comments(stmts)
             t = self.tok()
             if t[0] == "eof" or (t[0] == "keyword" and t[1] in BLOCK_END):
                 break
+            start = self.i
             if t[0] == "keyword" and t[1] == "return":
                 stmts.append(self.retstat())
+            else:
+                stmts.append(self.statement())
+            if self.seen is not None: self.seen.append((start, self.i, stmts[-1]))
+            if type(stmts[-1]) is Return:
+                self.comments(stmts)
                 break
-            stmts.append(self.statement())
+        if self.marks is not None: self.marks.add(self.i)
         return Block(stmts, self.i)
 
     def retstat(self):
         line = self.take()[2]
         exprs = []
         t = self.tok()
-        if not (t[0] == "eof" or (t[0] == "keyword" and t[1] in BLOCK_END) or self.is_(";")):
+        if not (t[0] in ("eof", "comment") or (t[0] == "keyword" and t[1] in BLOCK_END)
+                or self.is_(";")):
             exprs = self.explist()
         semi = False
         if self.is_(";"):
@@ -701,18 +875,18 @@ class Parser:
             self.take(); body = self.block(); self.expect("until"); cond = self.expr()
             return Repeat(body, cond, line, self.i)
         if k == "function":
-            self.take()
+            kw = self.i; self.take()
             base = self.name(); path = []; method = None
             while self.is_("."):
                 self.take(); n = self.name(); path.append((n.name, n.line))
             if self.is_(":"):
                 self.take(); n = self.name(); method = (n.name, n.line)
-            func = self.funcbody(line, method is not None)
+            func = self.funcbody(line, method is not None, kw)
             return FuncStat(base, path, method, func, line)
         if k == "local":
             self.take()
             if self.is_("function"):
-                self.take(); n = self.name(); func = self.funcbody(line)
+                kw = self.i; self.take(); n = self.name(); func = self.funcbody(line, False, kw)
                 return LocalFunc(n, func, line)
             names = [self.name()]
             while self.is_(","):
@@ -743,13 +917,14 @@ class Parser:
             self.err("syntax error")
         return CallStat(e, line)
 
-    def funcbody(self, line, is_method=False):
+    def funcbody(self, line, is_method=False, kw=None):
         t = self.tok()
         if t[0] == "raw":                     # a NOMINIFY-protected body, kept verbatim
             self.i += 1
             f = Func([], False, Block([], self.i), line, t[2] + t[1].count("\n"), is_method)
             f.raw = t[1]
             return f
+        paren = self.i
         self.expect("(")
         params, vararg = [], False
         if not self.is_(")"):
@@ -763,7 +938,10 @@ class Parser:
         self.expect(")")
         body = self.block()
         end_line = self.expect("end")[2]
-        return Func(params, vararg, body, line, end_line, is_method)
+        f = Func(params, vararg, body, line, end_line, is_method)
+        f.kw, f.toks = kw, (paren, self.i - 1)
+        if self.funcs is not None: self.funcs.append(f)
+        return f
 
     def explist(self):
         es = [self.expr()]
@@ -802,7 +980,7 @@ class Parser:
         if t[0] == "op" and t[1] == "{":
             return self.table()
         if t[0] == "keyword" and t[1] == "function":
-            self.i += 1; return self.funcbody(t[2])
+            self.i += 1; return self.funcbody(t[2], False, self.i - 1)
         return self.suffixedexp()
 
     def primaryexp(self):
@@ -845,7 +1023,13 @@ class Parser:
     def table(self):
         line = self.expect("{")[2]
         fields = []
-        while not self.is_("}"):
+        while True:
+            if self.marks is not None: self.marks.add(self.i)
+            while self.tok()[0] == "comment":
+                t = self.take()
+                fields.append(["comment", Comment(t[1], t[2]), None, None])
+            if self.is_("}"):
+                break
             if self.is_("["):
                 self.take(); k = self.expr(); self.expect("]"); self.expect("=")
                 f = ["index", k, self.expr(), None]
@@ -858,6 +1042,10 @@ class Parser:
             if self.is_(",") or self.is_(";"):
                 f[3] = self.take()[1]
             else:
+                if self.marks is not None: self.marks.add(self.i)
+                while self.tok()[0] == "comment":
+                    t = self.take()
+                    fields.append(["comment", Comment(t[1], t[2]), None, None])
                 break
         self.expect("}")
         return Table(fields, line)
@@ -947,6 +1135,8 @@ class Emitter:
             self.op("::", L); self.out.append(("name", s.name, L)); self.op("::", L)
         elif t is Semi:
             self.op(";", L)
+        elif t is Comment:
+            self.out.append(("comment", s.text, L))
         else:
             raise TypeError(t)
 
@@ -999,6 +1189,8 @@ class Emitter:
         elif t is Table:
             self.op("{", e.line)
             for kind, key, val, sep in e.fields:
+                if kind == "comment":
+                    self.out.append(("comment", key.text, key.line)); continue
                 if kind == "index":
                     self.op("[", e.line); self.expr(key); self.op("]", e.line); self.op("=", e.line)
                 elif kind == "named":
@@ -1310,6 +1502,7 @@ class Binding:
         s.live = False; s.deferred = []; s.newname = None
         s.wlines = []                             # lines it is declared/assigned on
         s.pinned = False                          # used inside a NOMINIFY-protected body
+        s.nomi = None                             # line of the NOMINIFY that keeps it
 
 class FCtx:
     def __init__(s, node, chunk, is_chunk, parent):
@@ -1358,7 +1551,10 @@ def require_target(e):
 class Info:
     """Everything one resolution pass learns about the program."""
 
-    def __init__(self, prog, whole):
+    def __init__(self, prog, whole, keep=frozenset()):
+        """keep: {(line, name)} of the variables a NOMINIFY directive keeps
+        (Directives.names); each binding declared or assigned there is
+        pinned, and listed in self.kept as (name, line)."""
         self.prog, self.whole = prog, whole
         self.globals, self.locals = {}, []
         self.dynamic = None
@@ -1370,6 +1566,13 @@ class Info:
         self.require_calls = 0                     # literal require "m" calls seen
         r = _Resolver(self)
         r.run()
+        self.kept = []
+        if keep:
+            for b in list(self.globals.values()) + self.locals:
+                hit = next((l for l in b.wlines if (l, b.name) in keep), None)
+                if hit is not None:
+                    b.pinned, b.nomi = True, hit
+                    self.kept.append((b.name, hit))
         # `require` used any other way (pcall(require, m), local r = require, ...)
         # can load a module the literal scan never sees: keep every module and
         # trust no cross-module load order
@@ -1622,7 +1825,7 @@ class _Resolver:
         elif t is Table:
             for kind, key, val, sep in e.fields:
                 if kind == "index": self.expr(key)
-                self.expr(val)
+                if kind != "comment": self.expr(val)
 
 
 # =============================================================================
@@ -1767,7 +1970,7 @@ def children_expr(e):
         out = []
         for kind, key, val, sep in e.fields:
             if kind == "index": out.append(key)
-            out.append(val)
+            if kind != "comment": out.append(val)
         return out
     return ()
 
@@ -1879,6 +2082,7 @@ class Folder:
             self.block(e.body); return e, None
         if t is Table:
             for f in e.fields:
+                if f[0] == "comment": continue
                 if f[0] == "index": f[1] = self.expr(f[1])[0]
                 f[2] = self.expr(f[2])[0]
             return e, None
@@ -1902,7 +2106,7 @@ class Folder:
         if self.do_dce:
             kept, dead = [], False
             for s in out:
-                if dead and type(s) is not Label:
+                if dead and type(s) not in (Label, Comment):
                     self.changes += 1; self.report.removed_code.append(("unreachable", s.line))
                     continue
                 dead = False if type(s) is Label else dead
@@ -1997,7 +2201,7 @@ def is_pure(e):
     if t in (Name, Func): return True
     if t is Paren: return is_pure(e.e)
     if t is Table:
-        return all((kind != "index" or is_pure(key)) and is_pure(val)
+        return all(kind == "comment" or ((kind != "index" or is_pure(key)) and is_pure(val))
                    for kind, key, val, sep in e.fields)
     if t is Bin and e.op in ("and", "or"): return is_pure(e.a) and is_pure(e.b)
     if t is Un and e.op == "not": return is_pure(e.a)
@@ -2020,6 +2224,9 @@ class Shaker:
         self.top_ids = {id(s) for s in info.prog.stmts}
         for b in info.globals.values():
             b.live = b.reserved or not (info.whole and info.dynamic is None)
+        for b in list(info.globals.values()) + info.locals:
+            if b.nomi is not None:
+                b.live = True                       # kept by NOMINIFY: never removed
         if info.dynamic is not None or not info.whole or info.require_escapes:
             self.mod_live = set(info.preloads)
 
@@ -2376,7 +2583,7 @@ def pass_alias(info, report):
             out = []
             for f in e.fields:
                 if f[0] == "index": out.append(("f", 1, f))
-                out.append(("f", 2, f))
+                if f[0] != "comment": out.append(("f", 2, f))
             for _, i, f in out:
                 def s3(x, f=f, i=i): f[i] = x
                 visit(f[i], s3)
@@ -2506,44 +2713,8 @@ def name_pool(excluded):
             continue
         yield n
 
-NOMINIFY_RE = re.compile(r"nominify", re.I)
-
-def nominify_lines(src):
-    """Source lines carrying a comment that contains NOMINIFY (any case). A
-    block comment counts for the line it starts on."""
-    lines, i, n = set(), 0, len(src)
-    while i < n:
-        if src.startswith("--", i):
-            lb = long_bracket(src, i + 2)
-            if lb:
-                lvl, st = lb
-                end = src.index("]" + "=" * lvl + "]", st) + lvl + 2
-            else:
-                nl = src.find("\n", i)
-                end = n if nl < 0 else nl
-            if NOMINIFY_RE.search(src, i, end):
-                lines.add(src.count("\n", 0, i) + 1)
-            i = end; continue
-        lb = long_bracket(src, i)
-        if lb:
-            lvl, st = lb
-            i = src.index("]" + "=" * lvl + "]", st) + lvl + 2; continue
-        if src[i] in "\"'":
-            q, j = src[i], i + 1
-            while src[j] != q:
-                j += 2 if src[j] == "\\" else 1
-            i = j + 1; continue
-        i += 1
-    return lines
-
-def pass_rename(info, report, keep_lines=frozenset()):
-    # NOMINIFY: a variable declared or assigned on a marked line keeps its name
-    for b in list(info.globals.values()) + info.locals:
-        if b.renamable and b.occ:
-            hit = next((l for l in b.wlines if l in keep_lines), None)
-            if hit is not None:
-                b.renamable = False
-                report.nominify.append((b.name, hit))
+def pass_rename(info, report):
+    # a variable a NOMINIFY directive keeps is pinned (Info), so not renamable
     gl = [b for b in info.globals.values() if b.renamable and b.occ]
     lo = [b for b in info.locals if b.renamable and b.occ]
     fixed = set(RESERVED)
@@ -2611,15 +2782,30 @@ def _take(it, n):
 # =============================================================================
 
 def layout(toks, width=120):
-    """Pack tokens into lines <= width; a new line at every function start."""
+    """Pack tokens into lines <= width; a new line at every function start.
+    A kept comment ends its line; one that had its own line(s) in the source
+    starts one too."""
     lines, first = [], []
-    cur, cur_len, prev = [], 0, None
+    cur, cur_len, prev, floor = [], 0, None, 0
     for kind, text, line in toks:
         if kind == "nl":
             if cur:
                 lines.append("".join(cur)); cur, cur_len = [], 0
             prev = None
             continue
+        line = max(line, floor)       # the line after a kept comment: after it
+        if kind == "comment":
+            if cur and text.own_line:
+                lines.append("".join(cur)); cur = []
+            if cur:
+                cur.append(" " + text)
+            else:
+                cur = [text]; first.append(line)
+            floor = line + text.count("\n") + 1
+            first.extend(range(line + 1, floor))
+            lines.append("".join(cur)); cur, cur_len, prev = [], 0, None
+            continue
+        floor = 0
         # a protected body is verbatim, newlines and all: only its first line
         # counts toward this line's width, and its later lines are lines too
         tlen = len(text.split("\n", 1)[0]) if kind == "raw" else len(text)
@@ -2649,6 +2835,7 @@ class Report:
         self.removed_modules, self.renames, self.aliased = [], [], []
         self.verbatim = []                        # lines of NOMINIFY-protected bodies
         self.nominify = []                        # (name, line) kept by NOMINIFY
+        self.comments = []                        # lines of comments kept by NOMINIFY
         self.folded = self.sugar = self.merged = self.dropped_params = 0
         self.disqualified, self.zero_write, self.dynamic = {}, [], None
         self.sizes = []          # (pass, chars)
@@ -2685,6 +2872,7 @@ class Report:
              [f"line {l}" for l in sorted(self.verbatim)])
         sect("names kept by a NOMINIFY comment",
              [f"line {l}: {n}" for n, l in sorted(self.nominify, key=lambda x: x[1])])
+        sect("comments kept by NOMINIFY", [f"line {l}" for l in sorted(self.comments)])
         # every "line N" above is a code-section line; shift to cart lines and
         # let the caller name the source file (ticpak passes its origin map)
         def fix(m):
@@ -2702,28 +2890,35 @@ def toklen(toks):
     return sum(len(t[1]) for t in toks if t[0] != "nl")
 
 def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False,
-               reflow=True, keep=()):
+               reflow=True, nomi=None):
     """The max pipeline. Returns a Result (text, report, renames, line_map).
     reflow: pack lines to `width` (the whitespace option); False keeps the
-    source's line breaks. keep: the (start, end) offsets of the function
-    bodies to keep verbatim (nominify_regions)."""
+    source's line breaks. nomi: the source's NOMINIFY Directives (found here
+    when None)."""
     passes = set(ALL_PASSES if passes is None else passes)
     unknown = passes - set(ALL_PASSES)
     if unknown:
         raise ValueError(f"unknown pass(es): {', '.join(sorted(unknown))}")
+    if nomi is None:
+        nomi = directives(src)
     rep = Report()
     offs = []
     toks = lex_lines(src, offs)
     rep.sizes.append(("input", toklen(toks)))
-    toks = protect(src, toks, offs, keep)
+    toks = protect(src, toks, offs, nomi)
     rep.verbatim = [t[2] for t in toks if t[0] == "raw"]
     prog = reparse(toks)
+
+    def info_of(prog):
+        info = Info(prog, whole_program, nomi.names)
+        rep.nominify = info.kept
+        return info
 
     first = True
     for rnd in range(1, 21):
         before = [t[:2] for t in strip_nl(toks)]
         if passes & {"fold", "inline", "dce"}:
-            info = Info(prog, whole_program)
+            info = info_of(prog)
             reasons = analyze_constants(info)
             if first:
                 rep.disqualified = reasons
@@ -2736,12 +2931,12 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
             pass_tidy(prog)
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
         if "shake" in passes:
-            info = Info(prog, whole_program)
+            info = info_of(prog)
             sh = Shaker(info, rep); sh.run(); sh.prune_block(prog)
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
         elif "inline" in passes:
             # constants without unused: still delete the inlined definitions
-            info = Info(prog, whole_program)
+            info = info_of(prog)
             analyze_constants(info)
             ConstDropper(info, rep).prune_block(prog)
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
@@ -2757,33 +2952,36 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
         pass_sugar(prog, rep)
     if "alias" in passes:
         saved, saved_alias = toks, list(rep.aliased)
-        info = Info(prog, whole_program)
+        info = info_of(prog)
         if pass_alias(info, rep):
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
-            worst = max((len(f.upvals) for f in Info(prog, whole_program).funcs), default=0)
+            worst = max((len(f.upvals) for f in info_of(prog).funcs), default=0)
             if worst > 250:                       # Lua 5.3 allows 255 upvalues per function
                 toks, rep.aliased = saved, saved_alias
                 rep.aliased.append(("(alias pass reverted: a function would need "
                                     f"{worst} upvalues)", 0))
                 prog = reparse(strip_nl(toks))
     if "merge" in passes:
-        info = Info(prog, whole_program)
+        info = info_of(prog)
         pass_merge(info, rep)
     pass_tidy(prog)
     toks = emit_tree(prog); prog = reparse(strip_nl(toks))
     rep.sizes.append(("small", toklen(toks)))
     if "rename" in passes:
-        info = Info(prog, whole_program)
-        pass_rename(info, rep, nominify_lines(src))
+        info = info_of(prog)
+        pass_rename(info, rep)
         toks = emit_tree(prog)
         prog = reparse(strip_nl(toks))
     rep.sizes.append(("renamed", toklen(toks)))
+    rep.comments = [t[2] for t in toks if t[0] == "comment"]
 
     text, first_lines = layout(toks, width) if reflow else layout_lines(toks)
-    # final proof: the text lexes back to exactly the emitted tokens and parses
+    # final proof: the text lexes back to exactly the emitted tokens (kept
+    # comments lex to nothing) and parses
     final = []
     for t in strip_nl(toks):
-        final.extend(lex(t[1]) if t[0] == "raw" else [t[:2]])
+        if t[0] != "comment":
+            final.extend(lex(t[1]) if t[0] == "raw" else [t[:2]])
     if [tuple(t) for t in lex(text)] != final:
         raise AssertionError("minify: layout changed the token stream - refusing to emit")
     reparse(lex_lines(text))
@@ -2799,22 +2997,24 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
 # Public API
 # =============================================================================
 
-def minify_ex(src, mode="max", whole_program=True, **opts):
+def minify_ex(src, mode="max", whole_program=True, top_directive=True, **opts):
     """mode: anything parse_options() takes - 'comments,rename', 'max',
-    or a set of OPTIONS (empty: passthrough)."""
+    or a set of OPTIONS (empty: passthrough). top_directive: a NOMINIFY in
+    the source's top comment block leaves it all alone (minify_cart_ex says
+    False: a cart's top block is its header, checked there)."""
     o = parse_options(mode)
-    if not o or top_block_nominify(src):       # NOMINIFY module: leave it alone
+    if not o or (top_directive and top_block_nominify(src)):   # leave it alone
         return Result(src, None, [], [])
-    keep = nominify_regions(src)
+    nomi = directives(src, top_directive)
     if o == {"comments"}:
-        out = strip_comments(src, keep)
+        out = strip_comments(src, nomi.keep())
         if lex(out) != lex(src):                                   # safety net
             raise AssertionError("token stream changed - refusing to emit")
         return Result(out, None, [], [])
     opts.setdefault("passes", [p for x in OPTIONS if x in o
                                for p in OPTION_PASSES.get(x, ())])
     return minify_max(src, whole_program=whole_program,
-                      reflow="whitespace" in o, keep=keep, **opts)
+                      reflow="whitespace" in o, nomi=nomi, **opts)
 
 def minify(src, mode="max", whole_program=True, **opts):
     """Minify Lua source; returns the text.
@@ -2832,7 +3032,9 @@ def split_cart(text, meta_keys=None):
 
     header -- the metadata lines (`-- title: ...`) found in the leading run of
               comment and blank lines, joined by newlines; other leading
-              comments are dropped. meta_keys limits which keys count (ticpak
+              comments are dropped, except that a comment block holding
+              NOMINIFY after the header block starts the code (spec R8i).
+              meta_keys limits which keys count (ticpak
               passes the checker's REQUIRED_META + OPTIONAL_META); None accepts any
               `-- <word>:` line.
     code   -- everything after that leading run, up to the first asset chunk.
@@ -2854,6 +3056,24 @@ def _split_cart(text, meta_keys):
     h = 0
     while h < len(lines) and (lines[h].lstrip().startswith("--") or not lines[h].strip()):
         h += 1
+    # The code starts early at a comment block holding NOMINIFY after the
+    # header block (unless metadata tags follow it): the minifier keeps it
+    # (spec R8i). A NOMINIFY in the header block itself is a whole-cart one.
+    l = 0
+    while l < h and not lines[l].strip():
+        l += 1
+    while l < h and lines[l].strip():
+        l += 1
+    while l < h:
+        if not lines[l].strip():
+            l += 1; continue
+        b = l
+        while l < h and lines[l].strip():
+            l += 1
+        if any(NOMINIFY_RE.search(x) for x in lines[b:l]) \
+                and not any(meta_re.match(x) for x in lines[b:h]):
+            h = b
+            break
     header = "\n".join(l for l in lines[:h] if meta_re.match(l))
     return header, "\n".join(lines[h:]), chunks, h
 
@@ -2873,13 +3093,21 @@ def minify_cart_ex(text, mode=("comments",), meta_keys=None, **opts):
     header, code, chunks, h = _split_cart(text, meta_keys)
     if not header:
         raise ValueError("no metadata header comments found - refusing to minify")
-    r = minify_ex(code, mode=mode, **opts)
-    hl = header.count("\n") + 1
+    try:
+        # the cart's top block was the header: the code's first comment
+        # block, if any, is not a whole-module directive
+        r = minify_ex(code, mode=mode, top_directive=False, **opts)
+    except NominifyError as e:                  # code lines -> cart lines
+        raise NominifyError(e.line + h, e.msg) from None
+    # code that starts with a kept comment stays apart from the header block,
+    # where it would read as part of the header (or a whole-cart directive)
+    sep = "\n\n" if r.text.lstrip().startswith("--") else "\n"
+    hl = header.count("\n") + len(sep)
     r.line_map = [(o + hl, i + h) for o, i in r.line_map]
     r.renames = [(n, o, k, l + h) for n, o, k, l in r.renames]
     if r.report is not None:
         r.report.off = h
-    r.text = header + "\n" + r.text + "\n" + chunks
+    r.text = header + sep + r.text + "\n" + chunks
     return r
 
 def minify_cart(text, mode=("comments",), meta_keys=None, **opts):

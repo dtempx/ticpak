@@ -23,14 +23,15 @@ on every sample cart.
 
 | Class | Checks |
 |---|---|
-| OptionParsing | empty set, the `max` API alias, unknown names and the old `default`/`all`/`none` presets rejected, implied `comments`, each raw subset gives exactly its effective set's output |
-| CommandLine | `ticpak`'s `--minify`: absent = no minification, bare = every option, `=a,b` = just those; presets and `--no-minify` rejected; a path after `--minify` gets a hint |
+| OptionParsing | empty set, the `max` API alias, unknown names (`default`, `all`, `none`, ...) rejected, implied `comments`, each raw subset gives exactly its effective set's output |
+| CommandLine | `ticpak`'s `--minify`: absent = no minification, bare = every option, `=a,b` = just those; preset names rejected; a path after `--minify` gets a hint |
 | Structure | output re-lexes and re-parses; metadata header and asset sections byte-identical; header still complete for the checker; deterministic; a pass report and a valid line map exactly when an option past `comments` is on |
-| OptionEffects | each option's signature, on and off: `none` is a passthrough; `comments` alone changes nothing but comments; no comment survives any option; `renameme_*` names shortened by `rename` only; `CONST_*` inlined **and their declarations removed** by `constants`; lines ≤ 120 columns with `whitespace`; source line breaks kept without it; unused function, dead branch, unrequired module and call sugar handled by `extra` |
+| OptionEffects | each option's signature, on and off: `none` is a passthrough; `comments` alone changes nothing but comments; no comment survives any option, except those a NOMINIFY directive keeps; `renameme_*` names shortened by `rename` only; `CONST_*` inlined **and their declarations removed** by `constants`; lines ≤ 120 columns with `whitespace`; source line breaks kept without it; unused function, dead branch, unrequired module and call sugar handled by `extra` |
 | Behaviour | original and minified carts run under real Lua 5.3 against a logging stand-in TIC-80 API ([harness.lua](harness.lua)): `BOOT()` once, `TIC()` 12 times; the call logs (every argument with its type and integer/float subtype) must be identical |
 | Sizes | adding any option never makes the code longer; `whitespace` never adds lines |
-| Nominify | variable-level NOMINIFY: markers found on the right lines (not inside strings); the marked names survive `rename` and are reported |
-| NominifyFunctionsAndModules | function- and module-level NOMINIFY: a directive on the declaration line, in the block above, in the block below; a function expression; an unused protected function (kept even by `extra`); a nested one; a module's top block; module level winning over function level; a blank line ending a block (module level at the top, nothing elsewhere); the whole cart; header tags not counting. Every protected body is byte for byte under every option set, and the names it uses (`pinned_*`, `PINNED_*`) survive `rename` and `constants` |
+| Nominify | variable-level NOMINIFY: a comment after the declaration or assignment, a block above it, the closing line of a multi-line statement, a `for` variable; not inside strings, not part of a longer word; the kept names survive `rename`, `constants` (not inlined) and `extra` (not removed), and are reported |
+| NominifyFunctionsAndModules | function- and module-level NOMINIFY: a directive on the declaration line, in the block above, on the closing line; a function expression; a block inside a body keeping only itself, not the function; an unused protected function (kept even by `extra`); a nested one; a module's top block; module level winning over function level; a blank line ending a block (module level at the top, nothing elsewhere); the whole cart; header tags not counting. Every protected body is byte for byte under every option set, and the names it uses (`pinned_*`, `PINNED_*`) survive `rename` and `constants` |
+| NominifyComments | kept comments: a block before a blank line (at the top of a cart's code too), above a call, between table fields, after a `return`, at the end of a block, after code with no variable; one inside a call's arguments moved after the call; one in unused code removed with it by `extra`; a kept `-- <` line stops; the word must stand alone |
 | Bundle | the multi-module [project/](project/) bundled by `ticpak.bundle.bundle()` for every set: assets and header kept, option signatures, same behaviour as the unminified bundle, `minify_label`, the stop on a `-- <` comment line in an unminified bundle |
 | BundleAssets | the project rebuilt with each of `make_samples`' asset layouts, plus bank 0 with CRLF, bundled with no options, `comments` and all: asset sections kept by the bundler's own cart split; a cart with no sections stops; a section in a module stops every build, naming its line; a prose `-- <MAP> notes` comment in a module is just stripped when minified |
 | Boot | (opt-in) each set's project bundle, then each asset layout's, boots headless in TIC-80 and saves a `.tic` that passes `ticpak check` and whose asset chunks equal `main.lua`'s sections decoded to bytes |
@@ -43,6 +44,8 @@ following made it fail:
 - ignoring NOMINIFY;
 - (2026-10-04) not pinning what protected code uses (12 failures), and
   finding no protected regions (19 failures).
+- (2026-10-05) keeping no variables a directive marks (39 failures), and
+  keeping no comments (19 failures).
 
 ## Files
 
@@ -51,7 +54,7 @@ following made it fail:
 | `test_options.py` | the tests (stdlib `unittest`) |
 | `harness.lua` | the stand-in TIC-80 API: logs every call, deterministic `btn`/`time`/`math.random` |
 | `make_samples.py` | writes `samples/*.lua` and `project/main.lua` from `code/` + generated assets; rerun after editing `code/` |
-| `code/*.lua` | the sample programs: `basic` (game loop, constants), `bundle` (ticpak-shaped `package.preload` modules), `syntax` (Lua 5.3 edge cases), `nominify` (variable markers), `nominify_funcs` (function-level directives), `nominify_modules` (module-level directives in a bundle), `nominify_main` (a whole-cart directive; its header gets a NOMINIFY line), `markers` (text that looks like asset tags), `project_main` (the project's entry stub) |
+| `code/*.lua` | the sample programs: `basic` (game loop, constants), `bundle` (ticpak-shaped `package.preload` modules), `syntax` (Lua 5.3 edge cases), `nominify` (variable markers), `nominify_funcs` (function-level directives), `nominify_modules` (module-level directives in a bundle), `nominify_main` (a whole-cart directive; its header gets a NOMINIFY line), `nominify_comments` (comments a directive keeps; `KEPT_*` must survive, `GONE_*` must not), `markers` (text that looks like asset tags), `project_main` (the project's entry stub) |
 | `samples/*.lua` | generated carts: code + header + assets in different layouts (none; bank 0's full set; chunks in banks 1–7; a 136-line SCREEN cover; a lone PALETTE), plus a CRLF copy of `basic` |
 | `project/` | a multi-file port for the ticpak tests: `main.lua` (generated) requiring `constants`, `util`, `game` |
 

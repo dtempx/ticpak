@@ -53,7 +53,7 @@ Self-contained: lexer → AST parser → tree passes → emitter → layout. Key
 - Safety nets are deliberate: output is re-lexed and must equal the emitted tokens, re-parsed, and must not contain a `-- <X` line. Failing these raises `AssertionError` rather than emitting. Keep them.
 - **Whole-program mode** (default) may inline/remove/rename globals because the bundle is the whole program; `whole_program=False` (fragment) never touches globals. Names that TIC-80 or Lua define are never renamed: `TIC80_GLOBALS` is an embedded generated block between `# <reserved>` markers (regenerate with `scripts/update_reserved.py`, don't hand-edit), plus `CALLBACKS` and `EXTRA_RESERVED`.
 - Function names are never renamed and each function starts on its own line, so runtime errors stay decodable.
-- `NOMINIFY` comments (variable, function, module, or whole-cart level) protect code; `nominify_regions` / `protect` turn protected bodies into verbatim `raw` tokens.
+- `NOMINIFY` directives (a comment block, or a comment after code) attach to statements: they keep variables (pinned), functions, modules, the whole cart, or else their own comment. `directives()` resolves them against one parse; `protect` turns protected bodies into verbatim `raw` tokens and inserts kept comments as `comment` tokens (`Comment` statements / table fields).
 
 `docs/minify-spec.md` is the contract, with requirement IDs (e.g. D7, R10c) that code and tests cite; `docs/minify.md` is usage. Update the spec when changing minifier semantics.
 

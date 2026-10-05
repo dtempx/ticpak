@@ -19,16 +19,22 @@ function keepfn_above(x)
   return x * PINNED_LIMIT
 end
 
-function keepfn_below(x)
-  -- NOMINIFY: the comment block directly below the declaration
-  return x + pinned_count
-end
+local function keepfn_closing(v)
+  -- kept
+  return v + pinned_count
+end -- NOMINIFY: on the line that closes it
 
 local keepfn_expr = function(t) -- NOMINIFY: a function expression
   return #t   -- kept
 end
 
--- NOMINIFY here is followed by a blank line, so it protects nothing
+function minfn_below(x)
+  -- NOMINIFY KEPT_BELOW: a block in the body, above a return: it protects
+  -- nothing (the function is minified), but is kept itself
+  return x - 2   -- this comment is removed
+end
+
+-- NOMINIFY here is followed by a blank line: it protects nothing
 
 local function minfn_after_blank(v)
   -- this comment is removed
@@ -49,7 +55,7 @@ local function minfn_outer(n)
 end
 
 function TIC()
-  local r = keepfn_same_line(1, 2) + keepfn_above(2) + keepfn_below(3)
-  r = r + keepfn_expr({1, 2, 3}) + minfn_after_blank(10) + minfn_outer(4)
+  local r = keepfn_same_line(1, 2) + keepfn_above(2) + keepfn_closing(3)
+  r = r + keepfn_expr({1, 2, 3}) + minfn_after_blank(10) + minfn_outer(4) + minfn_below(5)
   trace(r, pinned_count, PINNED_LIMIT)
 end

@@ -453,29 +453,39 @@ path would be read as the option list; ticpak says so if it happens.
 
 ### Opting code out: NOMINIFY
 
-A comment containing `NOMINIFY` (any case) protects code from the minifier.
+The word `NOMINIFY` (any case) in a comment protects code from the minifier.
 It is useful for names that must survive, such as globals another cart or the
-debugger reads by name, and for code that relies on exact text.
+debugger reads by name, for code that relies on exact text, and for comments
+that should ship with the cart (credits, a licence notice).
 
-| Where the comment is | What is kept |
+A directive is either a **comment block** that holds the word (one or more
+comment lines in a row; a blank line or code ends the block), or a comment
+**after code** on the same line. What it keeps depends on where it is:
+
+| Where the directive is | What is kept |
 |---|---|
-| the line that declares or assigns a variable | that variable's name, through `rename` |
-| a function's declaration line, or the comment block directly above or below it | the whole function, byte for byte |
+| directly above, or after, a variable's `local`, assignment or `for` | that variable: its name, declaration and value |
+| directly above a function, or after its first or last line | the whole function, byte for byte |
 | a module's top comment block | the whole module, byte for byte |
 | `main.lua`'s header block (outside the metadata tags) | the whole cart |
+| anywhere else | the comment itself |
 
 ```lua
-local score_table = {}  -- NOMINIFY: the high-score cart reads this name
+-- NOMINIFY: the high-score cart reads this name
+local score_table = {}
 
 -- NOMINIFY: timing-sensitive, keep it exactly as written
 function wait_vblank()
   ...
 end
+
+-- NOMINIFY: music by A. Composer, CC BY 4.0
 ```
 
-A blank line ends a comment block. Where a comment could apply to both a
-module and a function, the module wins. Details:
-[docs/minify.md](docs/minify.md).
+A directive inside a function body applies only to the statement after it,
+not to the function. Where a block could apply to both a module and a
+function, the module wins. Details:
+[docs/minify.md](docs/minify.md#opting-out-nominify).
 
 ### A pitfall: comments that look like asset tags
 
@@ -621,7 +631,7 @@ variable. `<name>.minify.json` translates both:
 
 `<name>.minify.txt` is the minifier's report for people: the code size after
 each pass, then every constant inlined, every piece of code or variable
-removed, every API function aliased, and every name kept by `NOMINIFY`, each
+removed, every API function aliased, and everything kept by `NOMINIFY`, each
 with its `file:line`. Read it when you want to know what happened to a
 particular name, or attach it when reporting a minifier bug. The file
 formats are described in [docs/minify.md](docs/minify.md#outputs).
