@@ -1,7 +1,7 @@
 # ticpak init: set up a multi-file project
 
 `init` has no ticpak command. You set the project up by hand, then prove it
-with `ticpak build`. First look at the folder:
+with `ticpak bundle`. First look at the folder:
 
 | The folder has | Do |
 |---|---|
@@ -84,8 +84,8 @@ function TIC() game_update() game_draw() end
    with `game_init`, `game_update` and `game_draw`, where `game_draw` calls
    `cls()` and prints the title.
 4. Add `*.tic` and `dist/` to `.gitignore`.
-5. Run `ticpak build -f` to prove the bundle boots on its own (see
-   [build.md](build.md)), and tell the user how to run it while developing.
+5. Run `ticpak bundle -f` to prove the bundle boots on its own (see
+   [bundle.md](bundle.md)), and tell the user how to run it while developing.
 
 ## Split a single-file cart
 
@@ -97,7 +97,7 @@ function TIC() game_update() game_draw() end
 3. Replace the moved code in `main.lua` with the `require` lines, in an order
    where each module's top-level code finds what it needs, followed by `BOOT`
    and `TIC`.
-4. Run `ticpak build -f`. If the original cart had a known-good behaviour,
+4. Run `ticpak bundle -f`. If the original cart had a known-good behaviour,
    compare it against the built cart in TIC-80.
 
 Shared state that many modules use (the score, the current state's update and
@@ -117,7 +117,7 @@ Check it against the rules above, in this order:
 4. Nothing blocks the minifier (see [below](#writing-code-that-minifies-well)).
 5. `pmem` without a `saveid`.
 
-Report what you find, fix it if the user agrees, then run `ticpak build -f`.
+Report what you find, fix it if the user agrees, then run `ticpak bundle -f`.
 
 ## The dev loop
 

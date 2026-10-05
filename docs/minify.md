@@ -62,7 +62,7 @@ always analyses the current code.
 | **rename** | Locals (including parameters, loop variables and labels) and non-function globals get one- or two-character names, the most-referenced first. Names are reused where scopes don't overlap. **Not renamed:** function names (so tracebacks stay readable), table fields and methods, the implicit `self`, and every TIC-80/Lua global (see [Reserved names](#reserved-names)), and any variable kept by a `NOMINIFY` directive (below). |
 | layout | Every function definition starts a new line, at any depth. Otherwise tokens are packed into lines of at most 120 characters, breaking only between tokens. |
 
-Run `ticpak build -f --minify -o dist/` and read `dist/<name>.minify.txt` to see
+Run `ticpak bundle -f --minify -o dist/` and read `dist/<name>.minify.txt` to see
 what each pass did to a given cart.
 
 ### Opting out (NOMINIFY)
@@ -255,7 +255,7 @@ builds is. This is what makes global inlining, removal and renaming safe:
   The report lists such globals, because they are often typos.
 - **Fragment mode** (`whole_program=False`, CLI `--fragment`) is for minifying
   one module on its own. Globals are then never inlined, removed or renamed.
-  `ticpak build enemies.lua -m` uses it to write `enemies.min.lua`.
+  `ticpak bundle enemies.lua -m` uses it to write `enemies.min.lua`.
   beyondcastlewolfenstein's `check.py` uses it for per-module size estimates.
 
 ### Why it can't miscompile the way npm luamin did
@@ -276,7 +276,7 @@ before it is returned.
 
 ## Outputs
 
-A folder build (`ticpak build -o dist/`) with any `--minify=` option past
+A folder build (`ticpak bundle -o dist/`) with any `--minify=` option past
 `comments` writes, next to `dist/<name>.lua`:
 
 - **`dist/<name>.minify.txt`**, the pass report. It opens with sizes after
@@ -298,7 +298,7 @@ A folder build (`ticpak build -o dist/`) with any `--minify=` option past
 
 ### What each option saved
 
-`ticpak build --verbose` with minification (and its `-r` report) shows a
+`ticpak bundle --verbose` with minification (and its `-r` report) shows a
 table of the bytes each option took off each source file (see the README's
 "What minification saved"). The `.minify.txt` report has the same totals,
 then what the minified code is made of, then the names that stayed, biggest
@@ -346,17 +346,17 @@ always asks for it when it minifies, and so does `ticpak minify --report`.
 From `ticpak` (the normal route):
 
 ```
-ticpak build -f --minify           # from the folder holding main.lua
+ticpak bundle -f --minify           # from the folder holding main.lua
 ```
 
 Standalone, writing to stdout. Whole-program `max` needs the **unminified
-bundle**, which `ticpak build -o dist/` without `--minify` writes to
+bundle**, which `ticpak bundle -o dist/` without `--minify` writes to
 `dist/<name>.lua`. A lone
 module or `main.lua` must use `--fragment`, or the globals its other modules
 define would look as if they were never written.
 
 ```
-ticpak build -f --minify=comments -o dist/   # bundle, comments out (see below)
+ticpak bundle -f --minify=comments -o dist/   # bundle, comments out (see below)
 ticpak minify --cart --mode=max --report=wn.txt dist/wavynavy.lua > wn.lua
 ticpak minify --mode=max --fragment enemies.lua
 ticpak minify --cart --mode=max --passes=fold,inline,dce,shake --width=100 dist/wavynavy.lua

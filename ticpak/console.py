@@ -60,6 +60,25 @@ class FlatStdout:
         return getattr(self.inner, name)
 
 
+def highlight(text):
+    """text in bright cyan when stdout is a terminal that shows colour (not
+    with NO_COLOR set, or when piped or redirected); else text as is."""
+    if os.environ.get("NO_COLOR") or not getattr(sys.stdout, "isatty", lambda: False)():
+        return text
+    if os.name == "nt":                 # turn on the console's ANSI escapes
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            handle, mode = k32.GetStdHandle(-11), ctypes.c_uint()
+            if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+                return text
+            if not mode.value & 4 and not k32.SetConsoleMode(handle, mode.value | 4):
+                return text
+        except Exception:
+            return text
+    return f"\033[96m{text}\033[0m"
+
+
 def has_terminal():
     """Is someone at a terminal to answer prompts? (Windows) isatty() is also
     true for NUL, so require a real console there."""
@@ -127,11 +146,21 @@ class Prompts:
                     return a.startswith("y")
         return self._ask(lambda: self.q.confirm(message, default=default).ask(), plain)
 
-    def text(self, message, default=""):
+    def text(self, message, default="", suffix=""):
+        """suffix: fixed text shown after the answer as it is typed (e.g.
+        ".tic"); not part of the answer. Plain prompts show it in the label."""
+        def fancy():
+            kw = {}
+            if suffix:
+                from prompt_toolkit.layout.processors import AfterInput
+                kw["input_processors"] = [AfterInput(suffix, style="class:instruction")]
+            return self.q.text(message, default=default, **kw).ask()
+
         def plain():
-            a = input(f"? {message} [{default}] " if default else f"? {message} ").strip()
+            label = f"{message.rstrip(':')} ({suffix}):" if suffix else message
+            a = input(f"? {label} [{default}] " if default else f"? {label} ").strip()
             return a or default
-        return self._ask(lambda: self.q.text(message, default=default).ask(), plain).strip()
+        return self._ask(fancy, plain).strip()
 
     def checkbox(self, message, choices, checked):
         """choices: [(value, label)]; checked: the values ticked to start

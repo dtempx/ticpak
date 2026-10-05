@@ -1,6 +1,6 @@
-# ticpak build: package the cart
+# ticpak bundle: package the cart
 
-`ticpak build` writes `<name>.tic` (the file to upload) beside `main.lua`,
+`ticpak bundle` writes `<name>.tic` (the file to upload) beside `main.lua`,
 after booting the bundle headless, and checks it. `<name>` is the header's
 `saveid`, else its `title`, made filename-safe. `-n NAME` overrides it.
 
@@ -11,20 +11,21 @@ after booting the bundle headless, and checks it. `<name>` is the header's
 | *(none)* | `<name>.tic` beside `main.lua`, nothing else |
 | `NAME.tic` | that `.tic` only |
 | `NAME.lua` | the bundle only (still boot-tested and checked) |
-| `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
+| `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), `<name>.ticpak.txt` (the full report), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
 
 Use a folder (`-o dist/`) whenever you need the bundle or the decode maps:
 to decode an error, or for `export html`/`export win`. `-n` with
 `-o NAME.tic`/`NAME.lua` is an error: the file names itself.
 
-`-r` also writes the full report (the check in full, what minification
-saved, the summary) to `<name>.ticpak.txt` beside the output. `-r PATH` or
+A folder build always writes the full report (the check in full, what
+minification saved, the summary) as `<name>.ticpak.txt` in the folder. For a
+single-file output, `-r` writes it beside the output. `-r PATH` or
 `--report=PATH` writes it to that file, or into that folder. Put the cart's
 path before `-r`, or `-r` takes it as the report's path; a `.lua` or `.tic`
 there is refused.
 
 A `.lua` other than `main.lua` with no metadata header or asset sections is a
-module on its own: `ticpak build enemies.lua -m` minifies it (globals left
+module on its own: `ticpak bundle enemies.lua -m` minifies it (globals left
 alone) to `enemies.min.lua` beside it, or to `-o`'s `.lua` or folder. It
 can't be a `.tic`.
 
@@ -35,10 +36,10 @@ can't be a `.tic`.
 2. **Build.**
 
    ```
-   ticpak build -f -m=comments
+   ticpak bundle -f -m=comments
    ```
 
-   - **`-f` forces a build.** Without it, `build` skips a cart whose
+   - **`-f` forces a build.** Without it, `bundle` skips a cart whose
      timestamps are up to date, and timestamps don't notice a changed `-m`
      or a ticpak upgrade.
    - **Write `-m=a,b` with `=`.** In `-m path/to/main.lua`, the path is read
@@ -57,17 +58,17 @@ can't be a `.tic`.
    Go further than `comments` only if the user wants the code under the free
    editor's 64K, or as small as possible. Code past 64K is fine on Pro, and
    every player loads it.
-3. **Report the summary.** It is the last lines of the output (and, with
-   `-r`, of the report file):
+3. **Report the summary.** It is the last lines of the output (and of the
+   report file, for a folder build or with `-r`):
 
    ```
    source: main.lua (21 modules)
    cart: mygame.tic (up-to-date)
-   size: 110K
+   cart size: 110K
    code: 41K (37%)
    assets: 69K (63%)
-   41K / 64K code size limit (64% used, 36% free)
-   151K unminified (73% reduction)
+   code limit: 41K / 64K (64% used, 36% free)
+   original code size: 151K (73% reduction)
    ```
 
    Exit status 1 means a limit or header violation, printed above the
@@ -75,7 +76,7 @@ can't be a `.tic`.
    check's detail.
 
    When the user wants the code smaller, build again with `--verbose` (or
-   read the `-r` report). Above the summary, a minified build then shows the
+   read the report file). Above the summary, a minified build then shows the
    bytes each option saved per source file:
 
    ```

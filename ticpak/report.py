@@ -109,14 +109,14 @@ def size_summary(tic, unminified=None):
         return f"{100 * n / total:.0f}%" if total else "0%"
 
     used = round(100 * code / FREE_LIMIT)
-    lines = [f"size: {kb(total)}",
+    lines = [f"cart size: {kb(total)}",
              f"code: {kb(code)} ({share(code)})",
              f"assets: {kb(asset)} ({share(asset)})",
-             f"{kb(code)} / {kb(FREE_LIMIT)} code size limit"
+             f"code limit: {kb(code)} / {kb(FREE_LIMIT)}"
              + (f" ({used}% used) - over the free editor's limit, fine on PRO (up to 512K)"
                 if code > FREE_LIMIT else f" ({used}% used, {100 - used}% free)")]
     if unminified is not None and unminified - code > 16:
-        lines.append(f"{kb(unminified)} unminified"
+        lines.append(f"original code size: {kb(unminified)}"
                      f" ({100 * (1 - code / unminified):.0f}% reduction)")
     elif unminified is not None:
         lines.append("not minified")

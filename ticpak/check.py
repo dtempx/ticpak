@@ -58,6 +58,8 @@ CHUNK_RAM_LIMIT = {
     "PALETTE":  96,
     "SCREEN":   16320,   # 240x136 at 4 bpp
 }
+# What one bank holds: every region sync() swaps, the SCREEN included.
+BANK_SIZE = sum(CHUNK_RAM_LIMIT.values())
 
 # The cover image shown by tic80.com and the cart browser: a bank-0 SCREEN
 # chunk, or the pre-0.80 GIF cover (COVER_DEP) that newer builds still read.
@@ -204,7 +206,9 @@ def bank_ranges(banks):
 
 def report_banks(usage, code_banks=(), code_size=0, code=None, quiet=False):
     """Print which of the 8 banks carry asset data, plus the (non-PRO) INFO
-    notes. usage maps bank -> [(section, bytes or None)]. When `code` is the
+    notes. usage maps bank -> [(section, bytes or None)]. With sizes (a .tic),
+    each used bank's sections and its total, in bytes used of what the bank
+    holds; a text cart's tags give only the section names. When `code` is the
     cart's whole program, also warn if banks 1-7 carry data that no sync()
     call could ever load. Informational only: never fails the check."""
     if quiet:
@@ -212,11 +216,21 @@ def report_banks(usage, code_banks=(), code_size=0, code=None, quiet=False):
     used = sorted(b for b in usage if usage[b])
     print(f"check:  banks  {len(used)} of {BANKS} carry asset data"
           " (bank 0 boots; 1-7 load via sync())")
+
+    def row(label, size, limit):
+        of = f" / {limit:>6,} bytes ({100 * size / limit:.0f}%)" if limit else \
+            " bytes (cover, not bank memory)"
+        print(f"        {label:20s} {size:>6,}{of}")
+
     for b in used:
         rows = sorted(usage[b], key=lambda r: BANK_ORDER.index(r[0])
                       if r[0] in BANK_ORDER else len(BANK_ORDER))
-        parts = [f"{n} {s:,}" if s is not None else n for n, s in rows]
-        print(f"        bank {b}   " + ", ".join(parts))
+        if any(s is None for _, s in rows):
+            print(f"        bank {b}   " + ", ".join(n for n, _ in rows))
+            continue
+        for n, s in rows:
+            row(f"bank {b} {n}", s, CHUNK_RAM_LIMIT.get(n))
+        row(f"bank {b} total", sum(s for n, s in rows if n in CHUNK_RAM_LIMIT), BANK_SIZE)
     unused = [b for b in range(BANKS) if b not in used]
     if unused:
         print(f"        unused   bank{'s' if len(unused) > 1 else ''} {bank_ranges(unused)}")

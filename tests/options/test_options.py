@@ -14,7 +14,7 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  `comments`, raw subset == its effective set
   CommandLine        --minify absent = none, bare = all, =a,b = those only;
                  preset names rejected; a path after --minify hinted;
-                 -m, -o/--out, -f/--force, --verbose, -v/--version;
+                 -m, -o/--output (and --out), -f/--force, --verbose, -v/--version;
                  `check -f` and -n with -o FILE rejected; -q; -r [PATH]
   Outputs        -o NAME.tic / NAME.lua / folder and the default <name>.tic
                  beside main.lua; cart vs module; a bad SOURCE; the
@@ -282,14 +282,14 @@ class TestCommandLine(unittest.TestCase):
             return cli.parse_args(list(argv))
 
     def test_absent_is_none(self):
-        for argv in ([], ["build"], ["build", "-f", "src/main.lua"], ["check"]):
+        for argv in ([], ["bundle"], ["bundle", "-f", "src/main.lua"], ["check"]):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, frozenset())
 
     def test_bare_is_all(self):
-        for argv in (["--minify"], ["build", "-f", "--minify"],
-                     ["build", "src/main.lua", "--minify"],
-                     ["build", "-m"], ["build", "-m", "-f"]):
+        for argv in (["--minify"], ["bundle", "-f", "--minify"],
+                     ["bundle", "src/main.lua", "--minify"],
+                     ["bundle", "-m"], ["bundle", "-m", "-f"]):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, M.ALL_OPTIONS)
 
@@ -316,16 +316,18 @@ class TestCommandLine(unittest.TestCase):
         self.assertIn("put SOURCE before --minify", str(e.exception))
 
     def test_out(self):
-        self.assertEqual(self.parse("build", "--out", "x")[1].out, "x")
-        self.assertEqual(self.parse("build", "-o", "x")[1].out, "x")
-        self.assertIsNone(self.parse("build")[1].out)
+        self.assertEqual(self.parse("bundle", "--output", "x")[1].out, "x")
+        self.assertEqual(self.parse("bundle", "--out", "x")[1].out, "x")
+        self.assertEqual(self.parse("bundle", "-o", "x")[1].out, "x")
+        self.assertIsNone(self.parse("build")[0])   # the old command name is gone
+        self.assertIsNone(self.parse("bundle")[1].out)
 
     def test_force_and_verbose(self):
-        _, args, _ = self.parse("build", "-f", "--verbose")
+        _, args, _ = self.parse("bundle", "-f", "--verbose")
         self.assertTrue(args.force and args.verbose)
-        _, args, _ = self.parse("build", "--force", "--verbose")
+        _, args, _ = self.parse("bundle", "--force", "--verbose")
         self.assertTrue(args.force and args.verbose)
-        _, args, _ = self.parse("build")
+        _, args, _ = self.parse("bundle")
         self.assertFalse(args.force or args.verbose)
         _, args, _ = self.parse("check", "--verbose")
         self.assertTrue(args.verbose)
@@ -335,7 +337,7 @@ class TestCommandLine(unittest.TestCase):
             out = io.StringIO()
             with self.subTest(flag=flag), contextlib.redirect_stdout(out), \
                     self.assertRaises(SystemExit) as e:
-                self.parse("build", flag)
+                self.parse("bundle", flag)
             self.assertEqual(e.exception.code, 0)
             self.assertIn("ticpak ", out.getvalue())
 
@@ -344,26 +346,26 @@ class TestCommandLine(unittest.TestCase):
             self.parse("check", "-f")
 
     def test_quiet(self):
-        for argv in (["build", "-q"], ["build", "--quiet", "-f"], ["check", "-q"],
+        for argv in (["bundle", "-q"], ["bundle", "--quiet", "-f"], ["check", "-q"],
                      ["check", "-q", os.path.join(HERE, "README.md")]):
             with self.subTest(argv=argv):
                 self.assertTrue(self.parse(*argv)[1].quiet)
-        for argv in (["-q"], ["build", "-q", "--verbose"]):
+        for argv in (["-q"], ["bundle", "-q", "--verbose"]):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.parse(*argv)
 
     def test_report(self):
-        self.assertIsNone(self.parse("build")[1].report)
-        for argv, want in ((["build", "-r"], True), (["build", "-r", "-f"], True),
-                           (["build", "--report"], True),
-                           (["build", "-r", "out.txt"], "out.txt"),
-                           (["build", "-r=out.txt"], "out.txt"),
-                           (["build", "--report=logs/"], "logs/"),
-                           (["build", "src", "-r"], True)):
+        self.assertIsNone(self.parse("bundle")[1].report)
+        for argv, want in ((["bundle", "-r"], True), (["bundle", "-r", "-f"], True),
+                           (["bundle", "--report"], True),
+                           (["bundle", "-r", "out.txt"], "out.txt"),
+                           (["bundle", "-r=out.txt"], "out.txt"),
+                           (["bundle", "--report=logs/"], "logs/"),
+                           (["bundle", "src", "-r"], True)):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].report, want)
-        for argv in (["build", "-r", "main.lua"], ["build", "--report=x.tic"],
-                     ["build", "--report="],
+        for argv in (["bundle", "-r", "main.lua"], ["bundle", "--report=x.tic"],
+                     ["bundle", "--report="],
                      ["check", os.path.join(HERE, "README.md"), "-r"]):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.parse(*argv)
@@ -371,8 +373,8 @@ class TestCommandLine(unittest.TestCase):
     def test_name_with_file_out_rejected(self):
         for out in ("x.tic", "x.lua", "a/X.TIC"):
             with self.subTest(out=out), self.assertRaises(SystemExit):
-                self.parse("build", "-n", "y", "-o", out)
-        self.assertEqual(self.parse("build", "-n", "y", "-o", "dist")[1].out, "dist")
+                self.parse("bundle", "-n", "y", "-o", out)
+        self.assertEqual(self.parse("bundle", "-n", "y", "-o", "dist")[1].out, "dist")
 
 
 class TestOutputs(unittest.TestCase):
@@ -422,6 +424,34 @@ class TestOutputs(unittest.TestCase):
                          os.path.join(os.path.abspath("logs"), "game.ticpak.txt"))
         self.assertEqual(bundle.Target(self.MAIN, "game", None, HERE).txt,
                          os.path.join(HERE, "game.ticpak.txt"))     # an existing folder
+
+    def test_folder_build_report(self):
+        """A build to a folder writes the report there without -r; a file
+        output only with -r. -r PATH still wins."""
+        self.assertIs(cli.build_report(None, "dist/"), True)
+        self.assertIs(cli.build_report(None, "dist"), True)
+        self.assertIsNone(cli.build_report(None, None))
+        self.assertIsNone(cli.build_report(None, "x.tic"))
+        self.assertIsNone(cli.build_report(None, "x.lua"))
+        self.assertIs(cli.build_report(True, "x.tic"), True)
+        self.assertEqual(cli.build_report("r.txt", "dist/"), "r.txt")
+
+    def test_folder_report_missing_is_stale(self):
+        """A folder build whose report is gone is out of date."""
+        tmp = tempfile.mkdtemp(prefix="outputs-")
+        try:
+            t = bundle.Target(self.MAIN, "game", tmp + "/", True)
+            for p in (t.tic, t.lua):
+                with open(p, "w") as f:
+                    f.write("x")
+            fresh, status = bundle.freshness(t)
+            self.assertFalse(fresh)
+            self.assertIn("game.ticpak.txt missing", status)
+            with open(t.txt, "w") as f:
+                f.write("x")
+            self.assertTrue(bundle.freshness(t)[0])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_is_cart(self):
         d = os.path.dirname(self.MAIN)
@@ -491,15 +521,15 @@ class TestOutputs(unittest.TestCase):
 
     def test_build_command(self):
         self.assertEqual(cli.build_command(None, M.ALL_OPTIONS, "g", "g", None),
-                         "ticpak build -m")
+                         "ticpak bundle -m")
         self.assertEqual(cli.build_command(None, frozenset(), "h", "g", "dist/"),
-                         "ticpak build -n h -o dist/")
+                         "ticpak bundle -n h -o dist/")
         self.assertEqual(cli.build_command("src", frozenset(), "a", "g", "a.tic"),
-                         "ticpak build src -o a.tic")
+                         "ticpak bundle src -o a.tic")
         self.assertEqual(cli.build_command(None, frozenset(), "g", "g", None, True),
-                         "ticpak build -r")
+                         "ticpak bundle -r")
         self.assertEqual(cli.build_command(None, frozenset(), "g", "g", None, "my r.txt"),
-                         'ticpak build "--report=my r.txt"')
+                         'ticpak bundle "--report=my r.txt"')
 
 
 class TestSummary(unittest.TestCase):
@@ -528,21 +558,21 @@ class TestSummary(unittest.TestCase):
         # CODE 42K (type 5), MAP 30K (4), PALETTE 48 B (12), all bank 0
         # total = 43008 + 30720 + 48 + 3 chunk headers of 4 bytes = 73788
         lines = self.summary([(5, 0, 43008), (4, 0, 30720), (12, 0, 48)], 157696)
-        self.assertEqual(lines, ["size: 72K",
+        self.assertEqual(lines, ["cart size: 72K",
                                      "code: 42K (58%)",
                                      "assets: 30K (42%)",
-                                     "42K / 64K code size limit (66% used, 34% free)",
-                                     "154K unminified (73% reduction)"])
+                                     "code limit: 42K / 64K (66% used, 34% free)",
+                                     "original code size: 154K (73% reduction)"])
 
     def test_unminified_over_limit_two_banks(self):
         # code split over two chunks (64K + 6K), maps in banks 0 and 1;
         # total = 65535 + 6145 + 1024 + 1024 + 4 headers = 73744
         lines = self.summary([(5, 1, 65535), (5, 0, 6145), (4, 0, 1024), (4, 1, 1024)],
                              71680)
-        self.assertEqual(lines, ["size: 72K",
+        self.assertEqual(lines, ["cart size: 72K",
                                      "code: 70K (97%)",
                                      "assets: 2.0K (3%)",
-                                     "70K / 64K code size limit (109% used) - over the"
+                                     "code limit: 70K / 64K (109% used) - over the"
                                      " free editor's limit, fine on PRO (up to 512K)",
                                      "not minified"])
 
@@ -583,10 +613,10 @@ class TestSummary(unittest.TestCase):
 
     def test_unknown_unminified(self):
         lines = self.summary([(5, 0, 1000)], None)
-        self.assertEqual(lines, ["size: 0.98K",
+        self.assertEqual(lines, ["cart size: 0.98K",
                                      "code: 0.98K (100%)",
                                      "assets: 0.00K (0%)",
-                                     "0.98K / 64K code size limit (2% used, 98% free)"])
+                                     "code limit: 0.98K / 64K (2% used, 98% free)"])
 
 
 class TestStructure(unittest.TestCase):

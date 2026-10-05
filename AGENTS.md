@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents working with code in this reposi
 
 ## What this is
 
-ticpak packages a multi-file TIC-80 Lua project (`main.lua` + modules loaded with `require`) into one uploadable `.tic`: it inlines modules as `package.preload` entries, optionally minifies, boots the bundle headless in TIC-80 Pro, saves the `.tic`, and checks it against TIC-80's limits. README.md is the full user reference; keep it in sync when behaviour or options change. `skills/ticpak/` is an Agent Skill for ticpak's *users'* agents (`SKILL.md` routes to `references/init.md`, `build.md`, `check.md`); it restates CLI flags, error messages and limits, so update it too when those change.
+ticpak packages a multi-file TIC-80 Lua project (`main.lua` + modules loaded with `require`) into one uploadable `.tic`: it inlines modules as `package.preload` entries, optionally minifies, boots the bundle headless in TIC-80 Pro, saves the `.tic`, and checks it against TIC-80's limits. README.md is the full user reference; keep it in sync when behaviour or options change. `skills/ticpak/` is an Agent Skill for ticpak's *users'* agents (`SKILL.md` routes to `references/init.md`, `bundle.md`, `check.md`); it restates CLI flags, error messages and limits, so update it too when those change.
 
 ## Commands
 
@@ -29,7 +29,7 @@ There is no linter or pytest config; tests are plain scripts using stdlib `unitt
 
 - Python 3.9+ and **no runtime dependencies** (questionary is an optional extra; `console.py` falls back to plain numbered prompts). Don't add required deps.
 - Target Lua is TIC-80 1.2's embedded **Lua 5.3** (no `<const>`); every minifier semantic rule is Lua 5.3's.
-- `build` and `check` must never prompt; only the bare `ticpak` command is interactive, and it exits with status 2 when there is no terminal.
+- `bundle` and `check` must never prompt; only the bare `ticpak` command is interactive, and it exits with status 2 when there is no terminal.
 
 ## Before committing
 

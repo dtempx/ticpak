@@ -16,6 +16,7 @@ from .header import CHUNK_RE, META_KEYS, cart_code
 
 FREE_LIMIT = 65536  # the free editor's code cap (PRO edits up to 512 KB; every player loads it all)
 ADDED = "(added by ticpak)"   # the savings row for the bundle's own lines: preload wrappers
+DEFAULT_DIR = "dist/"         # the interactive build's default output folder
 
 
 def out_kind(out):
@@ -38,7 +39,8 @@ class Target:
                       comments .minify.txt and .minify.json
 
     The name in a file -o is the file's own; `name` is used otherwise.
-    report (-r): None for no report file (txt None), True for
+    report (-r; a folder build passes True without it): None for no report
+    file (txt None), True for
     <name>.ticpak.txt beside the output, else a path: a folder (ending in /
     or \\, or one that exists) to put <name>.ticpak.txt in, or the file."""
 
@@ -72,6 +74,17 @@ class Target:
 
     def module_path(self, module):
         return os.path.join(self.cart_dir, *module.split(".")) + ".lua"
+
+
+def built_target(cart, name, report=None):
+    """The package as already built, for a run without -o that only reads it
+    (the bare command, check): <name>.tic beside the cart, or the folder build
+    in DEFAULT_DIR (the interactive build's default), the newer if both
+    exist. Neither built: the default, beside the cart."""
+    default = Target(cart, name, None, report)
+    built = [t for t in (default, Target(cart, name, DEFAULT_DIR, report))
+             if os.path.isfile(t.output)]
+    return max(built, key=lambda t: os.path.getmtime(t.output)) if built else default
 
 
 def is_cart(path):
@@ -122,15 +135,18 @@ def stub_requires(code):
 def freshness(t, module=False):
     """(up_to_date, status line) for an existing package: is its output (and,
     for a folder output, the .lua bundle beside the .tic) newer than the cart
-    and every module it requires? module: t.cart is a module on its own.
-    Timestamps only - a changed option (--minify) or tool does not count."""
+    and every module it requires? A folder output's report, or a module's,
+    must exist too: only a build writes it in full. module: t.cart is a
+    module on its own. Timestamps only - a changed option (--minify) or tool
+    does not count."""
     built = os.path.getmtime(t.output)
     names = [] if module else stub_requires(cart_code(t.cart))[0]
     sources = [t.cart] + [t.module_path(n) for n in names]
     changed = [fwd(p) for p in sources
                if not os.path.isfile(p) or os.path.getmtime(p) > built]
-    missing = ([f"{fwd(t.lua)} missing"]
-               if t.lua and t.lua != t.output and not os.path.isfile(t.lua) else [])
+    kept = [t.lua] + ([t.txt] if t.kind == "dir" or module else [])
+    missing = [f"{fwd(p)} missing" for p in kept
+               if p and p != t.output and not os.path.isfile(p)]
     label = "output" if module else "cart"
     if not changed and not missing:
         return True, f"{label}: {fwd(t.output)} (up-to-date)"
