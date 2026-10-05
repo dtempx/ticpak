@@ -728,7 +728,7 @@ A folder build (`-o dist/`) always writes the full report,
 nothing but the cart unless you ask: `-r` (or `--report`) also writes the
 full report. Either way a `report:` line names the file. A `check` without
 `-r` that finds a report a build left beside the output points at it
-(`hint: dist/<name>.ticpak.txt for more info`).
+(`hint: see dist/<name>.ticpak.txt for more info`).
 
 | Form | Writes |
 |---|---|
