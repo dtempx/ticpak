@@ -130,8 +130,8 @@ def ask_build_settings(ui, minify, name, out):
         print("  the name needs at least one letter or digit")
     minify = ask_minify(ui, minify)
     where = ui.select("Output:", [
-        ("tic", f"{name}.tic single-file output only"),
-        ("dir", f"output to a folder: {name}.tic (binary), {name}.lua (the equivalent source text), plus additional files"),
+        ("tic", f"{name}.tic - output .tic binary only"),
+        ("dir", f"output all files to a folder - {name}.tic (binary), {name}.lua (the equivalent source text), etc."),
     ], default="tic" if out is None else "dir")
     if where == "tic":
         return minify, name, None

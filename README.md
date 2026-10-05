@@ -424,8 +424,8 @@ Run `ticpak` with no command. If the cart has never been built, it prints
    4) [x] whitespace  remove extraneous newlines and whitespace
    5) [x] extra       further optimisations
 ? Output:
-  1) mygame.tic single-file output only  [default]
-  2) output to a folder: mygame.tic (binary), mygame.lua (the equivalent source text), plus additional files
+  1) mygame.tic - output .tic binary only [default]
+  2) output all files to a folder - mygame.tic (binary), mygame.lua (the equivalent source text), etc.
 ? Output folder: [dist/]
 ```
 
