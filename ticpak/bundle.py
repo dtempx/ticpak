@@ -92,11 +92,15 @@ def built_target(cart, name, report=None):
 
 def is_cart(path):
     """A file is a cart (rather than a module on its own) if it is main.lua or
-    has a metadata header or asset sections."""
+    has asset sections or a metadata header. Both are read strictly, as a
+    module's comments can look like either: a header needs two tags or more
+    (state_title.lua opens `-- title: two planes sky-write...`), and asset
+    sections run to the end of the file (a2boot.lua has a comment line
+    `-- <MAP> region ...` mid-code)."""
     if os.path.basename(path).lower() == "main.lua":
         return True
     text = open(path, encoding="utf-8").read()
-    return bool(CHUNK_RE.search(text) or parse_header(text))
+    return bool(minifier.split_cart(text)[2]) or len(parse_header(text)) >= 2
 
 
 def find_cart(source=None):

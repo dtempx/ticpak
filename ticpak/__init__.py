@@ -7,4 +7,4 @@ One command, `ticpak` (ticpak.cli), installed by pyproject.toml:
 
 Documentation: README.md; the minifier in docs/minify.md and docs/minify-spec.md.
 """
-__version__ = "0.3.5"     # keep in step with pyproject.toml's version
+__version__ = "0.3.6"     # keep in step with pyproject.toml's version

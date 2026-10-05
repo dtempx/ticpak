@@ -30,7 +30,7 @@ from .bundle import (DEFAULT_DIR, Target, built_options, built_target, bundle, f
                      out_kind, save_bundle, stub_requires, unminified_size)
 from .check import check_lua, check_tic
 from .console import FlatStdout, Progress, Prompts, fwd, has_terminal, highlight, show
-from .header import cart_code, ensure_header, package_name, slug
+from .header import META_KEYS, cart_code, ensure_header, package_name, slug
 from .report import (check_summary, kb, made_of_lines, savings_table, size_summary,
                      write_report)
 from .run import BOOT_SECONDS, verify
@@ -273,10 +273,53 @@ def check_files(paths, quiet):
     sys.exit(0 if ok else 1)
 
 
+def minify_command(argv):
+    """`ticpak minify FILE`: the minifier on its own, to stdout. A cart (see
+    is_cart) keeps its header and asset sections, and is minified as a whole
+    program unless it requires modules; anything else is minified as one
+    module, leaving its globals alone."""
+    ap = argparse.ArgumentParser(
+        prog="ticpak minify", usage="%(prog)s [options] FILE.lua    (writes to stdout)",
+        description="Minify one Lua file; with no option given, every option applies.\n\n"
+                    "A cart (main.lua, or a file with a metadata header or asset\n"
+                    "sections) keeps its header and asset sections. A cart that\n"
+                    "requires no modules is the whole program, so anything it doesn't\n"
+                    "use is removed; any other file is minified as one module,\n"
+                    "leaving its globals alone.",
+        epilog="extra does:\n" + "\n".join(f"  {k:<6} {v}" for k, v in
+                                           minifier.EXTRA_HELP.items())
+               + "\n\nfull documentation:"
+                 " https://github.com/dtempx/ticpak/blob/main/docs/minify.md",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("file", metavar="FILE.lua")
+    for o in minifier.OPTIONS:
+        ap.add_argument("--" + o, dest="options", action="append_const", const=o,
+                        help="further optimisations (listed below)" if o == "extra"
+                        else minifier.OPTION_HELP[o])
+    args = ap.parse_args(argv)
+    if not os.path.isfile(args.file):
+        sys.exit(f"minify: {args.file} not found")
+    options = minifier.parse_options(args.options or minifier.OPTIONS)
+    src = open(args.file, encoding="utf-8").read()
+    cart = is_cart(args.file)
+    header, code, chunks = minifier.split_cart(src, META_KEYS)
+    whole = cart and not stub_requires(code)[0]
+    try:
+        if cart and (header or chunks):     # chunks without a header: refused
+            r = minifier.minify_cart_ex(src, mode=options, meta_keys=META_KEYS,
+                                        whole_program=whole)
+        else:
+            r = minifier.minify_ex(src, mode=options, whole_program=whole)
+    except (ValueError, minifier.LuaSyntaxError) as e:
+        sys.exit(f"minify: {args.file}: {e}")
+    # bytes, so a non-ASCII character can't fail on a legacy console encoding
+    sys.stdout.buffer.write(r.text.encode("utf-8"))
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "minify":    # its own options: ticpak minify --help
-        minifier.main(argv[1:])
+        minify_command(argv[1:])
         return
     command, args, ap = parse_args(argv)
     console.VERBOSE = args.verbose

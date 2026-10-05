@@ -274,17 +274,22 @@ class TestOptionParsing(unittest.TestCase):
 
 
 class TestCommandLine(unittest.TestCase):
-    """ticpak's command line: --minify absent = none, bare = all, =a,b =
-    those only; -f/--force, --verbose and -v/--version."""
+    """ticpak's command line: --minify absent = none (all, as the interactive
+    question's default), bare = all, =a,b = those only; -f/--force, --verbose
+    and -v/--version."""
 
     def parse(self, *argv):
         with contextlib.redirect_stderr(io.StringIO()):
             return cli.parse_args(list(argv))
 
     def test_absent_is_none(self):
-        for argv in ([], ["bundle"], ["bundle", "-f", "src/main.lua"], ["check"]):
+        for argv in (["bundle"], ["bundle", "-f", "src/main.lua"], ["check"]):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, frozenset())
+
+    def test_interactive_default_is_all(self):
+        """No command: the interactive question offers every option first."""
+        self.assertEqual(self.parse()[1].minify, M.ALL_OPTIONS)
 
     def test_bare_is_all(self):
         for argv in (["--minify"], ["bundle", "-f", "--minify"],
@@ -375,6 +380,74 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(out=out), self.assertRaises(SystemExit):
                 self.parse("bundle", "-n", "y", "-o", out)
         self.assertEqual(self.parse("bundle", "-n", "y", "-o", "dist")[1].out, "dist")
+
+
+class TestMinifyCommand(unittest.TestCase):
+    """`ticpak minify FILE`: one flag per option (none = all of them); a cart
+    that requires no modules is the whole program, anything else a module
+    whose globals stay."""
+
+    HEADER = "-- title: t\n-- author: a\n-- script: lua\n\n"
+    # a module whose comments look like a header tag and an asset section
+    MODULE = ("-- title: the title screen, drawn\n\n"
+              "function title_draw()\n print(\"hi\", 1, 2) -- greet\nend\n"
+              "-- <MAP> region of RAM, reused\n"
+              "function unused_helper_fn() return 1 end\n")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="minify-cmd-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def run_cmd(self, *argv):
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["minify", *argv])
+        return out.buffer.getvalue().decode("utf-8")
+
+    def test_module_keeps_globals(self):
+        path = self.write("title.lua", self.MODULE)
+        self.assertFalse(bundle.is_cart(path))
+        out = self.run_cmd(path)
+        self.assertIn("function title_draw()", out)
+        self.assertIn("function unused_helper_fn()", out)
+        self.assertNotIn("--", out)
+
+    def test_whole_cart(self):
+        path = self.write("game.lua", self.HEADER + "function unused_helper_fn() return 1 end\n"
+                          "function TIC() cls(0) end\n")
+        self.assertTrue(bundle.is_cart(path))
+        out = self.run_cmd(path)
+        self.assertTrue(out.startswith(self.HEADER.strip()))
+        self.assertIn("function TIC()", out)
+        self.assertNotIn("unused_helper_fn", out)
+
+    def test_cart_with_modules_keeps_globals(self):
+        path = self.write("main.lua", "keepme_speed = 3\nrequire \"util\"\n"
+                          "function TIC() cls(0) end\n")
+        self.assertIn("keepme_speed", self.run_cmd(path))
+
+    def test_option_flags(self):
+        path = self.write("title.lua", self.MODULE)
+        out = self.run_cmd("--comments", path)
+        self.assertIn("function title_draw()\n print(\"hi\", 1, 2)", out)
+        self.assertNotIn("--", out)
+        out = self.run_cmd("--comments", "--whitespace", path)
+        self.assertIn('print("hi",1,2)', out)
+
+    def test_old_flags_rejected(self):
+        path = self.write("title.lua", self.MODULE)
+        for flag in ("--mode=max", "--cart", "--fragment", "--report=r.txt",
+                     "--passes=fold", "--width=80", "--inline=all"):
+            with self.subTest(flag=flag), self.assertRaises(SystemExit):
+                self.run_cmd(flag, path)
 
 
 class TestOutputs(unittest.TestCase):
@@ -491,7 +564,7 @@ class TestOutputs(unittest.TestCase):
             a = self.answers.pop(0)
             return default if a is None else a
 
-        def text(self, message, default=""):
+        def text(self, message, default="", suffix=""):
             return self._next(message, default)
 
         def select(self, message, choices, default):

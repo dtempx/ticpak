@@ -12,8 +12,8 @@ covers usage, behaviour and testing.
 
 ## Options
 
-Minification is a set of options, combined with commas
-(`--minify=comments,rename` in `ticpak`, `--mode=comments,rename` here):
+Minification is a set of options (`--minify=comments,rename` for `ticpak
+bundle`, `--comments --rename` for `ticpak minify`):
 
 | Option | What it does | Pass |
 |---|---|---|
@@ -23,8 +23,9 @@ Minification is a set of options, combined with commas
 | `whitespace` | Extraneous newlines and whitespace removed: one function start per line, packed to 120 columns. **Without it, the source's line breaks are kept**, one space of indent per block level. | layout |
 | `extra` | Every further optimisation, together: constant expressions evaluated, unreachable code removed, functions/variables/modules nothing uses removed, call sugar, API aliasing, `local` merging. | fold, dce, shake, sugar, alias, merge |
 
-To run a subset of `extra`'s passes (bisecting a problem), use this tool's
-`--passes=` directly; `ticpak` only offers them as one option.
+To run a subset of `extra`'s passes (bisecting a problem), pass `passes=` to
+the module API (or `--passes=` to `tests/minify/difftest.py`); the command
+line only offers them as one option.
 
 Every option except `comments` works on the token stream, so choosing any of
 them removes comments too (`comments` is added automatically).
@@ -39,8 +40,9 @@ them removes comments too (`comments` is added automatically).
 | `--minify` | every option: the whole-program pipeline below | 42,039 |
 
 In `ticpak`, no `--minify` means no minification, a bare `--minify` means
-every option, and `--minify=OPTION,...` means just those. This module's API
-and its `--mode` take the same comma-separated options (empty: passthrough),
+every option, and `--minify=OPTION,...` means just those. `ticpak minify`
+takes each option as a flag (`--rename`), and none means every option. This
+module's API takes the same comma-separated options (empty: passthrough),
 plus `max` for every option.
 
 ## What `max` does
@@ -253,9 +255,10 @@ builds is. This is what makes global inlining, removal and renaming safe:
   trusted.
 - **A global that is never written** is always `nil`, so conditions on it fold.
   The report lists such globals, because they are often typos.
-- **Fragment mode** (`whole_program=False`, CLI `--fragment`) is for minifying
-  one module on its own. Globals are then never inlined, removed or renamed.
-  `ticpak bundle enemies.lua -m` uses it to write `enemies.min.lua`.
+- **Fragment mode** (`whole_program=False`) is for minifying one module on its
+  own. Globals are then never inlined, removed or renamed.
+  `ticpak bundle enemies.lua -m` uses it to write `enemies.min.lua`, and
+  `ticpak minify` for any file that is not a cart requiring no modules.
   beyondcastlewolfenstein's `check.py` uses it for per-module size estimates.
 
 ### Why it can't miscompile the way npm luamin did
@@ -338,8 +341,8 @@ would shorten), goto labels, `NOMINIFY` code, and spaces and line breaks. In
 a cart, the metadata header and asset sections count as one more entry.
 
 The measuring is read-only and off by default: `savings=True` turns it on
-(`minify_ex`, `minify_cart_ex`; `Result.savings`, a `Savings`). `ticpak`
-always asks for it when it minifies, and so does `ticpak minify --report`.
+(`minify_ex`, `minify_cart_ex`; `Result.savings`, a `Savings`). `ticpak
+bundle` always asks for it when it minifies.
 
 ## Running it
 
@@ -349,28 +352,24 @@ From `ticpak` (the normal route):
 ticpak bundle -f --minify           # from the folder holding main.lua
 ```
 
-Standalone, writing to stdout. Whole-program `max` needs the **unminified
-bundle**, which `ticpak bundle -o dist/` without `--minify` writes to
-`dist/<name>.lua`. A lone
-module or `main.lua` must use `--fragment`, or the globals its other modules
-define would look as if they were never written.
+Standalone, `ticpak minify FILE` writes to stdout. Each option is a flag:
+`--comments`, `--rename`, `--constants`, `--whitespace`, `--extra`; with
+none of them, every option applies.
 
 ```
 ticpak bundle -f --minify=comments -o dist/   # bundle, comments out (see below)
-ticpak minify --cart --mode=max --report=wn.txt dist/wavynavy.lua > wn.lua
-ticpak minify --mode=max --fragment enemies.lua
-ticpak minify --cart --mode=max --passes=fold,inline,dce,shake --width=100 dist/wavynavy.lua
+ticpak minify dist/wavynavy.lua > wn.lua      # the whole program, every option
+ticpak minify --rename --whitespace enemies.lua   # one module, two options
 ```
 
-| Option | Meaning |
-|---|---|
-| `--mode=OPTION,…` | Comma-separated options as in [Options](#options), or `max` for all of them. The CLI defaults to `max`. |
-| `--cart` | Treat the file as a text cart: header + code + asset chunks, through `minify_cart()`. |
-| `--fragment` | Not a whole program (one module): leave globals alone. |
-| `--passes=a,b,…` | Run a subset of `fold,inline,dce,shake,rename,sugar,alias,merge` by internal pass name (overrides the passes the options chose), to bisect a problem. Tidying and layout always run. |
-| `--width=N` | Line width for the layout (default 120). |
-| `--inline=all` | Inline every constant, ignoring the size check. |
-| `--report=FILE` | Write the pass report, with what each option saved. With `comments` only, which runs no passes, just the savings. |
+It decides how to treat the file itself. A cart (`main.lua`, or a file with a
+metadata header of two tags or more, or asset sections running to the end of
+the file) keeps its header and asset chunks, through `minify_cart_ex()`. Only
+a cart that requires no modules, such as the **unminified bundle**
+(`ticpak bundle -o dist/` without `--minify` writes it to `dist/<name>.lua`),
+is minified as the whole program. Anything else, a module or a `main.lua`
+that requires modules, is minified as a fragment, since the globals it defines
+may be read by other files and would otherwise look unused.
 
 As a module (`ticpak` uses `minify_cart_ex`):
 

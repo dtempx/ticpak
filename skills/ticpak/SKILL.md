@@ -48,7 +48,9 @@ otherwise `check`.
   run, or install it with
   `uv tool install "ticpak @ git+https://github.com/dtempx/ticpak"`
   (no uv? see the README's "Installing uv"). It is one command: checking
-  files and minifying are `ticpak check FILE...` and `ticpak minify`.
+  files and minifying are `ticpak check FILE...` and `ticpak minify FILE`
+  (stdout; flags `--comments`, `--rename`, `--constants`, `--whitespace`,
+  `--extra`, none meaning all; a module's globals are left alone).
 - **Run from the folder holding `main.lua`** (ticpak also finds
   `src/main.lua`), or pass the cart's path as the first argument.
 - **The metadata header must be complete.** The comment block at the top of

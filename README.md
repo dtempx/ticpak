@@ -291,7 +291,7 @@ ticpak bundle -o dist/           # dist/<name>.tic, .lua and .ticpak.txt (the re
 ticpak bundle path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak bundle enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
-ticpak minify --fragment enemies.lua    # one module, minified, to stdout
+ticpak minify enemies.lua        # one module, minified, to stdout
 ```
 
 A `SOURCE` that doesn't exist, or a file that isn't a `.lua`, is an error,
@@ -328,16 +328,24 @@ TIC-80 binary is needed. It exits 1 if any file has a violation.
 
 ### The minifier on its own
 
-`ticpak minify FILE` minifies one Lua file or text cart and writes the result
-to stdout. Unlike `bundle`, it applies every option unless `--mode` says
-otherwise:
+`ticpak minify FILE` minifies one Lua file and writes the result to stdout.
+Each minify option is a flag of its own (`--comments`, `--rename`,
+`--constants`, `--whitespace`, `--extra`); with none of them, every option
+applies.
 
 ```
-ticpak minify --fragment enemies.lua > enemies.min.lua   # one module
-ticpak minify --cart --report=report.txt dist/mygame.lua > small.lua
+ticpak minify enemies.lua > enemies.min.lua         # one module, every option
+ticpak minify --comments --whitespace enemies.lua   # just those options
+ticpak minify dist/mygame.lua > small.lua           # an unminified bundle
 ```
 
-`ticpak minify --help` lists its options; [docs/minify.md](docs/minify.md) has
+It works out what the file is. A cart (`main.lua`, or a file with a metadata
+header or asset sections) keeps its header and asset sections. A cart that
+requires no modules, such as the unminified bundle `ticpak bundle -o
+mygame.lua` writes, is the whole program, so `extra` removes anything it doesn't
+use. Anything else, including a `main.lua` that requires modules, is minified
+as one module: its globals are left alone, since other files may use them.
+`ticpak minify --help` lists the flags; [docs/minify.md](docs/minify.md) has
 the details.
 
 ### A module on its own
@@ -357,7 +365,10 @@ ticpak bundle enemies.lua -m -o out/      # out/enemies.min.lua
 `-m` works as for a cart, so leave it out and the copy is not minified. A
 module can't be saved as a `.tic` (`-o NAME.tic` is an error), and
 `ticpak check` has no package to check for it. A `.lua` that does have a
-header or asset sections is a cart, whatever its name.
+header or asset sections is a cart, whatever its name. A header here means at
+least two metadata tags at the top, so a module whose opening comment happens
+to begin `-- title: ...` stays a module; and asset sections run to the end of
+the file, so a `-- <MAP> ...` comment in the middle of code doesn't count.
 
 ### Up to date or not
 

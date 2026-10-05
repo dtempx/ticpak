@@ -24,8 +24,9 @@ single-file output, `-r` writes it beside the output. `-r PATH` or
 path before `-r`, or `-r` takes it as the report's path; a `.lua` or `.tic`
 there is refused.
 
-A `.lua` other than `main.lua` with no metadata header or asset sections is a
-module on its own: `ticpak bundle enemies.lua -m` minifies it (globals left
+A `.lua` other than `main.lua` with no metadata header (two tags or more at
+the top) or asset sections (running to the end of the file) is a module on its
+own: `ticpak bundle enemies.lua -m` minifies it (globals left
 alone) to `enemies.min.lua` beside it, or to `-o`'s `.lua` or folder. It
 can't be a `.tic`.
 

@@ -15,7 +15,7 @@ a set - `comments,rename`; an empty set is a passthrough:
   extra       the remaining optimisations: evaluate constant expressions,
               remove unreachable code and anything nothing uses, call sugar,
               alias heavily used API functions, merge local statements
-`max` (this module's API and --mode only, not ticpak) means every option.
+`max` (this module's API only, not the ticpak CLI) means every option.
 Every option but `comments` works on the token stream, so it removes comments
 too.
 
@@ -28,7 +28,7 @@ statements, substitute a whole subexpression by a literal (parenthesised where
 precedence could change), or rename identifiers, so no expression is ever
 regrouped. The final text is re-lexed and re-parsed before it is returned.
 """
-import bisect, math, re, sys
+import bisect, math, re
 from decimal import Decimal
 
 OPTIONS = ("comments", "rename", "constants", "whitespace", "extra")
@@ -52,8 +52,8 @@ EXTRA_HELP = {
 OPTION_PASSES = {"constants": ("inline",), "rename": ("rename",),
                  "extra": tuple(EXTRA_HELP)}
 ALL_OPTIONS = frozenset(OPTIONS)
-# `max` = every option: kept for this module's API and its own --mode (the
-# test suites and older callers say mode="max"); ticpak does not accept it.
+# `max` = every option: kept for this module's API (the test suites and older
+# callers say mode="max"); the ticpak CLI does not accept it.
 PRESETS = {"max": OPTIONS}
 
 
@@ -3414,71 +3414,3 @@ def minify_cart(text, mode=("comments",), meta_keys=None, **opts):
     cart without one would lose its title/script fields.
     """
     return minify_cart_ex(text, mode, meta_keys, **opts).text
-
-
-USAGE = """usage: ticpak minify [options] FILE.lua    (writes to stdout)
-
-  --mode=OPTION,...   comments, rename, constants, whitespace, extra; or max
-                      for all of them (the default)
-  --cart              FILE is a text cart: keep its header and asset sections
-  --fragment          FILE is one module, not a whole program: leave globals alone
-  --report=FILE       write the pass report to FILE
-  --passes=a,b,...    run only these internal passes (fold, inline, dce, shake,
-                      rename, sugar, alias, merge), to bisect a problem
-  --width=N           line width of the layout (default 120)
-  --inline=all        inline every constant, ignoring the size check
-
-full documentation: https://github.com/dtempx/ticpak/blob/main/docs/minify.md"""
-
-
-def main(argv=None):
-    """`ticpak minify`: minify one Lua file or text cart to stdout."""
-    argv = sys.argv[1:] if argv is None else argv
-    if not argv or "-h" in argv or "--help" in argv:
-        print(USAGE)
-        sys.exit(0 if argv else 2)
-    mode, cart, opts = "max", False, {}
-    report_path = None
-    args = [a for a in argv if not a.startswith("--")]
-    for a in argv:
-        if not a.startswith("--"):
-            continue
-        if a.startswith("--mode="):
-            mode = a.split("=", 1)[1]
-        elif a == "--cart":
-            cart = True
-        elif a == "--fragment":
-            opts["whole_program"] = False
-        elif a.startswith("--passes="):
-            v = a.split("=", 1)[1]
-            opts["passes"] = [p for p in v.split(",") if p] if v else []
-        elif a.startswith("--width="):
-            opts["width"] = int(a.split("=", 1)[1])
-        elif a == "--inline=all":
-            opts["inline_all"] = True
-        elif a.startswith("--report="):
-            report_path = a.split("=", 1)[1]
-        else:
-            sys.exit(f"minify: unknown option {a}\n\n{USAGE}")
-    if len(args) != 1:
-        sys.exit(USAGE)
-    try:
-        chosen = parse_options(mode)
-    except ValueError as e:
-        sys.exit(f"minify: --mode: {e}")
-    if chosen <= {"comments"} and set(opts) - {"whole_program"}:
-        sys.exit("minify: --passes/--width/--inline need an option beyond comments")
-    src = open(args[0], encoding="utf-8").read()
-    try:
-        if cart:
-            r = minify_cart_ex(src, mode=mode, savings=bool(report_path), **opts)
-        else:
-            r = minify_ex(src, mode=mode, savings=bool(report_path), **opts)
-    except ValueError as e:
-        sys.exit(f"minify: {e}")
-    sys.stdout.write(r.text)
-    if report_path and r.report is not None:
-        open(report_path, "w", encoding="utf-8").write(r.report.text())
-    elif report_path and r.savings is not None:      # comments only: no pass report
-        open(report_path, "w", encoding="utf-8").write(
-            "\n".join(["ticpak minify report", ""] + savings_text(r.savings)) + "\n")
