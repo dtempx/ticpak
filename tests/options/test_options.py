@@ -15,12 +15,13 @@ make_samples.py) and on the ticpak project in project/. Per combination:
   CommandLine        --minify absent = none, bare = all, =a,b = those only;
                  preset names rejected; a path after --minify hinted;
                  -m, -o/--out, -f/--force, --verbose, -v/--version;
-                 `check -f` and -n with -o FILE rejected
+                 `check -f` and -n with -o FILE rejected; -q; -r [PATH]
   Outputs        -o NAME.tic / NAME.lua / folder and the default <name>.tic
                  beside main.lua; cart vs module; a bad SOURCE; the
                  interactive output questions and the rerun hint
   Summary        the closing size summary's lines and arithmetic, on a .tic
-                 built by hand (no TIC-80 run)
+                 built by hand (no TIC-80 run); minify savings only with
+                 --verbose and in the -r report
   Structure      output re-lexes and re-parses; metadata header and asset
                  sections byte-identical; header still complete for check.py;
                  deterministic; a pass report exactly when an option past
@@ -33,6 +34,9 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  the logs must be identical, value types included
   Sizes          adding an option never makes the code longer; `whitespace`
                  never adds lines
+  Savings        what each option saved (savings=True): bytes balance per
+                 line and in total, options that are off save nothing,
+                 constants and extra split, the bundle's per-file table
   Nominify       NOMINIFY-kept variables (spec R8g): marked after or above
                  their statement; never renamed, inlined or removed
   NominifyFunctionsAndModules  function- and module-level NOMINIFY (R8h):
@@ -339,6 +343,31 @@ class TestCommandLine(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.parse("check", "-f")
 
+    def test_quiet(self):
+        for argv in (["build", "-q"], ["build", "--quiet", "-f"], ["check", "-q"],
+                     ["check", "-q", os.path.join(HERE, "README.md")]):
+            with self.subTest(argv=argv):
+                self.assertTrue(self.parse(*argv)[1].quiet)
+        for argv in (["-q"], ["build", "-q", "--verbose"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit):
+                self.parse(*argv)
+
+    def test_report(self):
+        self.assertIsNone(self.parse("build")[1].report)
+        for argv, want in ((["build", "-r"], True), (["build", "-r", "-f"], True),
+                           (["build", "--report"], True),
+                           (["build", "-r", "out.txt"], "out.txt"),
+                           (["build", "-r=out.txt"], "out.txt"),
+                           (["build", "--report=logs/"], "logs/"),
+                           (["build", "src", "-r"], True)):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.parse(*argv)[1].report, want)
+        for argv in (["build", "-r", "main.lua"], ["build", "--report=x.tic"],
+                     ["build", "--report="],
+                     ["check", os.path.join(HERE, "README.md"), "-r"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit):
+                self.parse(*argv)
+
     def test_name_with_file_out_rejected(self):
         for out in ("x.tic", "x.lua", "a/X.TIC"):
             with self.subTest(out=out), self.assertRaises(SystemExit):
@@ -374,8 +403,25 @@ class TestOutputs(unittest.TestCase):
         t = bundle.Target(self.MAIN, "game", "dist/")
         base = os.path.join(os.path.abspath("dist"), "game")
         self.assertEqual((t.lua, t.tic, t.txt, t.map_json, t.output),
-                         (base + ".lua", base + ".tic", base + ".txt",
+                         (base + ".lua", base + ".tic", None,
                           base + ".minify.json", base + ".tic"))
+
+    def test_report_paths(self):
+        """-r: <name>.ticpak.txt beside the output; -r PATH: that file, or
+        <name>.ticpak.txt in a folder."""
+        d = os.path.dirname(self.MAIN)
+        self.assertEqual(bundle.Target(self.MAIN, "game", None, True).txt,
+                         os.path.join(d, "game.ticpak.txt"))
+        self.assertEqual(bundle.Target(self.MAIN, "game", "dist/", True).txt,
+                         os.path.join(os.path.abspath("dist"), "game.ticpak.txt"))
+        self.assertEqual(bundle.Target(self.MAIN, "game", "x/my.tic", True).txt,
+                         os.path.join(os.path.abspath("x"), "my.ticpak.txt"))
+        self.assertEqual(bundle.Target(self.MAIN, "game", None, "r.txt").txt,
+                         os.path.abspath("r.txt"))
+        self.assertEqual(bundle.Target(self.MAIN, "game", None, "logs/").txt,
+                         os.path.join(os.path.abspath("logs"), "game.ticpak.txt"))
+        self.assertEqual(bundle.Target(self.MAIN, "game", None, HERE).txt,
+                         os.path.join(HERE, "game.ticpak.txt"))     # an existing folder
 
     def test_is_cart(self):
         d = os.path.dirname(self.MAIN)
@@ -450,6 +496,10 @@ class TestOutputs(unittest.TestCase):
                          "ticpak build -n h -o dist/")
         self.assertEqual(cli.build_command("src", frozenset(), "a", "g", "a.tic"),
                          "ticpak build src -o a.tic")
+        self.assertEqual(cli.build_command(None, frozenset(), "g", "g", None, True),
+                         "ticpak build -r")
+        self.assertEqual(cli.build_command(None, frozenset(), "g", "g", None, "my r.txt"),
+                         'ticpak build "--report=my r.txt"')
 
 
 class TestSummary(unittest.TestCase):
@@ -495,6 +545,41 @@ class TestSummary(unittest.TestCase):
                                      "70K / 64K code size limit (109% used) - over the"
                                      " free editor's limit, fine on PRO (up to 512K)",
                                      "not minified"])
+
+    def test_savings_verbose_and_report_only(self):
+        """What minification saved is --verbose detail and -r report content,
+        never in the default output; -r names the file it wrote."""
+        d = tempfile.mkdtemp(prefix="minify-summary-")
+        try:
+            tic = os.path.join(d, "game.tic")
+            with open(tic, "wb") as f:
+                f.write(self.tic([(5, 0, 1000)]))
+            groups = {"main.lua": {"source": 3000, "comments": 2000, "final": 1000}}
+            for verbose, report_to in ((False, None), (True, None), (False, True)):
+                t = bundle.Target(tic, "game", tic, report_to)
+                t.savings = (groups, M.Savings(), M.parse_options("comments"))
+                out = io.StringIO()
+                saved = cli.console.VERBOSE
+                cli.console.VERBOSE = verbose
+                try:
+                    # the hand-made .tic has no header: a violation, exit 1
+                    with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+                        report.check_summary(t, 3000)
+                finally:
+                    cli.console.VERBOSE = saved
+                with self.subTest(verbose=verbose, report=report_to):
+                    self.assertEqual("bytes saved" in out.getvalue(), verbose)
+                    self.assertIn("size: ", out.getvalue())
+                    if report_to:
+                        self.assertIn("game.ticpak.txt", out.getvalue().splitlines()[-1])
+                        text = read_text(os.path.join(d, "game.ticpak.txt"))
+                        self.assertIn("minify: bytes saved", text)
+                        self.assertIn("3,000", text)
+                        self.assertTrue(text.startswith("check: "))
+                    else:
+                        self.assertFalse(os.path.exists(os.path.join(d, "game.ticpak.txt")))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_unknown_unminified(self):
         lines = self.summary([(5, 0, 1000)], None)
@@ -868,6 +953,115 @@ class TestNominifyComments(unittest.TestCase):
         src = "local a = 1 -- nominifying\nlocal b = 2 -- NOMINIFY_X\ntrace(a, b)\n"
         self.assertEqual(M.directives(src).names, frozenset())
         self.assertEqual(M.directives(src).comments, [])
+
+
+class TestSavings(unittest.TestCase):
+    """What each option saved (Result.savings, savings=True): the bytes
+    balance line by line and in total, an option that is off saved nothing,
+    and what the output is made of adds up to its size."""
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def measured(name, opts):
+        return M.minify_cart_ex(SAMPLES[name], mode=opts, meta_keys=META_KEYS, savings=True)
+
+    def test_off_by_default(self):
+        self.assertIsNone(minified("basic", M.ALL_OPTIONS).savings)
+
+    def test_same_output(self):
+        for name, opts in combos():
+            with self.subTest(sample=name, opts=label(opts)):
+                self.assertEqual(self.measured(name, opts).text, minified(name, opts).text)
+
+    def test_balanced(self):
+        for name, opts in combos():
+            with self.subTest(sample=name, opts=label(opts)):
+                r = self.measured(name, opts)
+                tot = r.savings.total()
+                self.assertEqual(tot.get("source"), len(SAMPLES[name].encode("utf-8")))
+                self.assertEqual(tot.get("final"), len(r.text.encode("utf-8")))
+                for line, d in r.savings.lines.items():
+                    self.assertEqual(d.get("source", 0) - d.get("final", 0),
+                                     sum(d.get(k, 0) for k in M.SAVINGS), f"line {line}")
+
+    def test_options_off_save_nothing(self):
+        for name, opts in combos():
+            with self.subTest(sample=name, opts=label(opts)):
+                tot = self.measured(name, opts).savings.total()
+                for o in ("constants", "extra", "rename"):
+                    if o not in opts:
+                        self.assertFalse(tot.get(o), o)
+                if not opts:
+                    self.assertFalse(tot.get("comments") or tot.get("whitespace"))
+
+    def test_made_of(self):
+        for name, opts in combos():
+            with self.subTest(sample=name, opts=label(opts)):
+                sv = self.measured(name, opts).savings
+                if opts - {"comments"} and not whole_cart_kept(name):
+                    self.assertEqual(sum(n for _, n in sv.left), sv.total()["final"])
+                    self.assertTrue(all(n > 0 for _, n in sv.left), sv.left)
+                else:
+                    self.assertEqual(sv.left, [])
+
+    def test_constants_and_extra_split(self):
+        """markers has constants to inline and unused code: with both
+        options on, each gets its own share. (Rename then has nothing left:
+        every renameme_ there is a constant or unused.)"""
+        tot = self.measured("markers", M.ALL_OPTIONS).savings.total()
+        for o in ("comments", "whitespace", "constants", "extra"):
+            self.assertGreater(tot.get(o, 0), 0, o)
+        for o in ("constants", "rename"):
+            alone = self.measured("markers", M.parse_options(o)).savings.total()
+            self.assertGreater(alone[o], 0, o)
+
+    def test_in_report(self):
+        text = minified("markers", M.ALL_OPTIONS).report.text()
+        self.assertNotIn("bytes saved by option", text)
+        text = self.measured("markers", M.ALL_OPTIONS).report.text()
+        self.assertIn("bytes saved by option", text)
+        self.assertIn("what the minified code is made of", text)
+
+    def test_bundle_table(self):
+        tmp = tempfile.mkdtemp(prefix="savings-")
+        try:
+            t = bundle.Target(PROJECT_MAIN, "game", os.path.join(tmp, "x.lua"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                raw = bundle.bundle(t, M.ALL_OPTIONS)
+            groups, sv, options = t.savings
+            self.assertEqual(list(groups), ["main.lua", "constants.lua", "util.lua",
+                                            "game.lua", bundle.ADDED])
+            self.assertEqual(sum(g["source"] for g in groups.values()), raw)
+            self.assertEqual(sum(g["final"] for g in groups.values()),
+                             len(t.code[:bundle.CHUNK_RE.search(t.code).start()]
+                                 .encode("utf-8")))
+            table = report.savings_table(groups, options)
+            self.assertRegex(table[1], r"^file +source +comments +whitespace +constants"
+                                       r" +extra +rename +after$")
+            self.assertRegex(table[-1], rf"^total +{raw:,} ")
+            self.assertEqual([r.split()[0] for r in table[2:]],
+                             list(groups)[:-1] + ["(added", "total"])
+            # comments only: its column and whitespace's
+            t = bundle.Target(PROJECT_MAIN, "game", os.path.join(tmp, "y.lua"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                bundle.bundle(t, M.parse_options("comments"))
+            groups, _, options = t.savings
+            table = report.savings_table(groups, options)
+            self.assertRegex(table[1], r"^file +source +comments +whitespace +after$")
+            t = bundle.Target(PROJECT_MAIN, "game", os.path.join(tmp, "z.lua"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                bundle.bundle(t, frozenset())
+            self.assertIsNone(t.savings)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_removed_module_marked(self):
+        groups = {"main.lua": {"source": 2048, "comments": 1024, "final": 1024},
+                  "unused.lua": {"source": 1024, "extra": 1024}}
+        table = report.savings_table(groups, M.ALL_OPTIONS)
+        self.assertTrue(table[3].endswith("(removed: unused)"))
+        self.assertFalse(table[2].endswith("(removed: unused)"))
+        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +1,024$")
 
 
 class TestBundle(unittest.TestCase):

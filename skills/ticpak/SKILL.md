@@ -14,7 +14,8 @@ tic80.com, the web player and `export html`/`export win` have no filesystem.
 ticpak closes that gap: it inlines the modules into one cart, optionally
 minifies it, boots it headless to prove it runs, saves `<name>.tic` beside
 `main.lua` (`-o` can choose a `.tic`, the `.lua` bundle, or a folder of
-both plus the check report) and checks it against TIC-80's limits.
+both; `-r` adds the full report as `<name>.ticpak.txt`) and checks it
+against TIC-80's limits.
 
 ## Pick the action
 
@@ -39,6 +40,8 @@ otherwise `check`.
 - **Always pass a command: `ticpak build` or `ticpak check`.** A bare `ticpak`
   is interactive. With no terminal it refuses to run and exits with status 2.
   `build` and `check` never prompt: anything missing becomes an error message.
+  Don't pass `-q`: it prints nothing, so you'd have only the exit status
+  to read.
 - **Find the tool.** Check that `ticpak --version` works. If it doesn't, use
   `uvx --from git+https://github.com/dtempx/ticpak ticpak ...` for a one-off
   run, or install it with

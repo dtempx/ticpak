@@ -11,11 +11,17 @@ after booting the bundle headless, and checks it. `<name>` is the header's
 | *(none)* | `<name>.tic` beside `main.lua`, nothing else |
 | `NAME.tic` | that `.tic` only |
 | `NAME.lua` | the bundle only (still boot-tested and checked) |
-| `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), `<name>.txt` (check report), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
+| `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
 
 Use a folder (`-o dist/`) whenever you need the bundle or the decode maps:
 to decode an error, or for `export html`/`export win`. `-n` with
 `-o NAME.tic`/`NAME.lua` is an error: the file names itself.
+
+`-r` also writes the full report (the check in full, what minification
+saved, the summary) to `<name>.ticpak.txt` beside the output. `-r PATH` or
+`--report=PATH` writes it to that file, or into that folder. Put the cart's
+path before `-r`, or `-r` takes it as the report's path; a `.lua` or `.tic`
+there is refused.
 
 A `.lua` other than `main.lua` with no metadata header or asset sections is a
 module on its own: `ticpak build enemies.lua -m` minifies it (globals left
@@ -51,8 +57,8 @@ can't be a `.tic`.
    Go further than `comments` only if the user wants the code under the free
    editor's 64K, or as small as possible. Code past 64K is fine on Pro, and
    every player loads it.
-3. **Report the summary.** It is the last lines of the output (and, for a
-   folder build, of `<dir>/<name>.txt`):
+3. **Report the summary.** It is the last lines of the output (and, with
+   `-r`, of the report file):
 
    ```
    source: main.lua (21 modules)
@@ -67,6 +73,25 @@ can't be a `.tic`.
    Exit status 1 means a limit or header violation, printed above the
    summary. Explain it using [check.md](check.md). `--verbose` adds progress and the
    check's detail.
+
+   When the user wants the code smaller, build again with `--verbose` (or
+   read the `-r` report). Above the summary, a minified build then shows the
+   bytes each option saved per source file:
+
+   ```
+   minify: bytes saved, by file and option (negative: the option added bytes)
+   file                    source  comments  whitespace  constants  extra  rename   after
+   board.lua               12,241     6,357       1,206        478    141     375   3,684
+   ...
+   total                   95,731    44,763      10,326      5,039    866   5,607  29,130
+   ```
+
+   Point to the biggest `after` files. What the code is made of follows,
+   then the biggest names never renamed: function names and globals, which
+   you can shorten by hand. A negative entry is normal. An inlined constant's
+   bytes move to the file that reads it, and the `(added by ticpak)` row
+   holds the aliases `extra` declares. `(removed: unused)` marks a module
+   that nothing uses.
 4. **Give the user the path to the `.tic`** (the `cart:` status line). That
    is the file tic80.com takes. For a web or native build, build with
    `-o dist/`, load `dist/<name>.lua` in TIC-80 and run `export html <name>`
@@ -110,7 +135,8 @@ match: the bundle is the same.
   `dist/<name>.minify.json`. It gives `[file, line]` in your sources. The
   file's `"renames"` list maps a short name in the message (`attempt to call
   a nil value (global 'q')`) back to the original name.
-  `dist/<name>.minify.txt` lists what each pass removed, inlined or renamed.
+  `dist/<name>.minify.txt` gives the bytes each option saved, then lists
+  what each pass removed, inlined or renamed.
 - **Built with no `-m` or `-m=comments`:** open `dist/<name>.lua` at line 37.
   The nearest `package.preload["mod"] = function(...)` above it names the
   module. Without `-m`, the module's line is the bundle line minus that

@@ -557,6 +557,11 @@ and 2–3 is typical. The small passes (sugar, alias, merge, tidy) run *before*
   bisected to one pass.
 - **f. Report** (`dist/<game>.minify.txt`):
   - characters before and after, overall and per pass;
+  - the UTF-8 bytes each option saved, and what the minified code is made of
+    (strings, field names, names never renamed, ...) with the biggest names
+    that stayed. These are measured only, by source line, so `ticpak` can
+    print them per file (`minify.md` "What each option saved"). No pass reads
+    them;
   - the constants inlined (name, value, number of reads);
   - the strings kept by the size check;
   - the expressions folded;

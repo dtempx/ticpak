@@ -15,6 +15,7 @@ from .console import detail, fwd, show
 from .header import CHUNK_RE, META_KEYS, cart_code
 
 FREE_LIMIT = 65536  # the free editor's code cap (PRO edits up to 512 KB; every player loads it all)
+ADDED = "(added by ticpak)"   # the savings row for the bundle's own lines: preload wrappers
 
 
 def out_kind(out):
@@ -33,12 +34,15 @@ class Target:
       out None        <cart dir>/<name>.tic only (the default)
       out "x.tic"     x.tic only
       out "x.lua"     x.lua (the bundle) only
-      out "dir/"      dir/<name>.lua, .tic, .txt, and with minification past
+      out "dir/"      dir/<name>.lua and .tic, and with minification past
                       comments .minify.txt and .minify.json
 
-    The name in a file -o is the file's own; `name` is used otherwise."""
+    The name in a file -o is the file's own; `name` is used otherwise.
+    report (-r): None for no report file (txt None), True for
+    <name>.ticpak.txt beside the output, else a path: a folder (ending in /
+    or \\, or one that exists) to put <name>.ticpak.txt in, or the file."""
 
-    def __init__(self, cart, name, out=None):
+    def __init__(self, cart, name, out=None, report=None):
         self.cart = os.path.abspath(cart)
         self.cart_dir = os.path.dirname(self.cart)
         self.kind = "tic" if out is None else out_kind(out)
@@ -47,7 +51,7 @@ class Target:
             self.name = name
             self.dist_dir = os.path.abspath(out)
             base = os.path.join(self.dist_dir, name)
-            self.lua, self.tic, self.txt = base + ".lua", base + ".tic", base + ".txt"
+            self.lua, self.tic = base + ".lua", base + ".tic"
             self.map_txt, self.map_json = base + ".minify.txt", base + ".minify.json"
         else:
             path = (os.path.join(self.cart_dir, name + ".tic") if out is None
@@ -55,8 +59,16 @@ class Target:
             self.name = os.path.splitext(os.path.basename(path))[0]
             self.dist_dir = os.path.dirname(path)
             setattr(self, self.kind, path)
+        report_name = self.name + ".ticpak.txt"
+        if report is True:
+            self.txt = os.path.join(self.dist_dir, report_name)
+        elif report and (report.endswith(("/", "\\")) or os.path.isdir(report)):
+            self.txt = os.path.join(os.path.abspath(report), report_name)
+        elif report:
+            self.txt = os.path.abspath(report)
         self.output = self.tic or self.lua      # the file the status line is about
         self.code = None                        # the bundle text, once built
+        self.savings = None                     # minified: (by file, Savings, options)
 
     def module_path(self, module):
         return os.path.join(self.cart_dir, *module.split(".")) + ".lua"
@@ -245,7 +257,8 @@ def bundle(t, minify_options=frozenset()):
     raw = len(out.encode("utf-8"))
 
     try:
-        res = minifier.minify_cart_ex(out, mode=minify_options, meta_keys=META_KEYS)
+        res = minifier.minify_cart_ex(out, mode=minify_options, meta_keys=META_KEYS,
+                                      savings=bool(minify_options))
     except minifier.NominifyError as e:      # name the source file and line
         n = e.line
         where = (f"{origin[n - 1][0]}:{origin[n - 1][1]}"
@@ -253,6 +266,14 @@ def bundle(t, minify_options=frozenset()):
         sys.exit(f"bundle: {where}: {e.msg}")
     except ValueError as e:
         sys.exit(f"bundle: {e}")
+    if res.savings is not None:
+        def file_of(line):
+            f = origin[line - 1][0] if 0 < line <= len(origin) else None
+            return f or ADDED
+        groups = res.savings.group(file_of)
+        if ADDED in groups:
+            groups[ADDED] = groups.pop(ADDED)       # last
+        t.savings = (groups, res.savings, minify_options)
     out = res.text
     tag_lines(out, origin if not minify_options else None)
     if not check_header(out, quiet=True):
@@ -303,9 +324,14 @@ def minify_module(t, minify_options=frozenset()):
     src = open(t.cart, encoding="utf-8").read()
     module_sections(src, os.path.basename(t.cart))
     try:
-        out = minifier.minify_ex(src, mode=minify_options, whole_program=False).text
+        res = minifier.minify_ex(src, mode=minify_options, whole_program=False,
+                                 savings=bool(minify_options))
     except (ValueError, minifier.LuaSyntaxError) as e:
         sys.exit(f"minify: {show(t.cart)}: {e}")
+    out = res.text
+    if res.savings is not None:
+        name = os.path.basename(t.cart)
+        t.savings = (res.savings.group(lambda line: name), res.savings, minify_options)
     os.makedirs(os.path.dirname(t.lua), exist_ok=True)
     with open(t.lua, "w", encoding="utf-8") as f:
         f.write(out)

@@ -279,8 +279,10 @@ before it is returned.
 A folder build (`ticpak build -o dist/`) with any `--minify=` option past
 `comments` writes, next to `dist/<name>.lua`:
 
-- **`dist/<name>.minify.txt`**, the pass report, with sizes after each pass and
-  the lists below, each entry naming its `file:line`:
+- **`dist/<name>.minify.txt`**, the pass report. It opens with sizes after
+  each pass and the bytes each option saved (see
+  [What each option saved](#what-each-option-saved)). Then come the lists
+  below, each entry naming its `file:line`:
   - the constants inlined, and those kept by the size check;
   - the code, bindings and modules removed;
   - the names aliased;
@@ -293,6 +295,51 @@ A folder build (`ticpak build -o dist/`) with any `--minify=` option past
     token (TIC-80 reports `[string "…"]:37:`, so look up `"37"`);
   - `"renames"` lists every renamed identifier with its original name and
     source line.
+
+### What each option saved
+
+`ticpak build --verbose` with minification (and its `-r` report) shows a
+table of the bytes each option took off each source file (see the README's
+"What minification saved"). The `.minify.txt` report has the same totals,
+then what the minified code is made of, then the names that stayed, biggest
+first. The minifier
+measures, in UTF-8 bytes, what each stage leaves of every source line. Each
+token keeps the line it came from through every pass, so the measurements
+add up per file. Stage by stage:
+
+| Option | Measured as |
+|---|---|
+| `comments` | the bytes of every comment removed (not those `NOMINIFY` keeps) |
+| `constants` | the token bytes the optimisation loop removes, run with `inline` alone |
+| `extra` | the rest of that loop (fold, dce, shake), then sugar, alias and merge |
+| `rename` | the token bytes rename removes |
+| `whitespace` | what is left over: whitespace removed from the source, less what the layout puts back |
+
+The optimisation loop runs `inline` together with fold, dce and shake until
+nothing changes, so one pass's work can't be told apart from another's.
+With both `constants` and `extra` on, the minifier runs the loop a second
+time with `inline` alone (well under a second for the largest port) and
+gives `extra` the difference. This measures constants first. A different
+order would split the same total differently. The redundant `;` and table
+separators that tidying removes count as `extra` when sugar, alias or merge
+run, and as `whitespace` otherwise.
+
+Options move bytes as well as remove them: an inlined constant's bytes go to
+the line that reads it, and an alias's `local` declaration to the line it is
+declared on. So one line's (or file's) saving for an option can be negative.
+Every line still balances: `before - after` is the sum of its options'
+savings. A module that shake removed has an `after` of 0.
+
+What the code is made of splits the output into strings, numbers, keywords,
+operators, table field and method names, TIC-80 and Lua names, names never
+renamed (function names, globals in a fragment or under dynamic access,
+`NOMINIFY` names, `self`), variable names (renamed, or the ones `rename`
+would shorten), goto labels, `NOMINIFY` code, and spaces and line breaks. In
+a cart, the metadata header and asset sections count as one more entry.
+
+The measuring is read-only and off by default: `savings=True` turns it on
+(`minify_ex`, `minify_cart_ex`; `Result.savings`, a `Savings`). `ticpak`
+always asks for it when it minifies, and so does `ticpak minify --report`.
 
 ## Running it
 
@@ -323,7 +370,7 @@ ticpak minify --cart --mode=max --passes=fold,inline,dce,shake --width=100 dist/
 | `--passes=a,b,…` | Run a subset of `fold,inline,dce,shake,rename,sugar,alias,merge` by internal pass name (overrides the passes the options chose), to bisect a problem. Tidying and layout always run. |
 | `--width=N` | Line width for the layout (default 120). |
 | `--inline=all` | Inline every constant, ignoring the size check. |
-| `--report=FILE` | Write the pass report. |
+| `--report=FILE` | Write the pass report, with what each option saved. With `comments` only, which runs no passes, just the savings. |
 
 As a module (`ticpak` uses `minify_cart_ex`):
 
@@ -334,6 +381,8 @@ text = minify.minify(src, mode="comments,rename")       # any options
 minify.parse_options("comments,rename")                 # -> frozenset({...})
 r = minify.minify_cart_ex(cart_text, mode="max", meta_keys=KEYS)
 r.text, r.report.text(), r.renames, r.line_map          # Result
+r = minify.minify_cart_ex(cart_text, mode="max", meta_keys=KEYS, savings=True)
+r.savings.total(), r.savings.lines, r.savings.left      # bytes saved per option
 minify.minify(module_src, whole_program=False)          # fragment
 ```
 

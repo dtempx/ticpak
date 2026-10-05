@@ -13,8 +13,9 @@ same `-o` the build used. If it says the `.tic` is not found, build it first
 ([build.md](build.md)). Given files, `ticpak check` checks exactly those: any
 `.tic` or text-cart `.lua` files. For a `.lua`, it checks the header and lists
 the banks its `-- <MAP1>`-style section tags use. Both exit 0 when every check
-passes and 1 on any violation. A folder build (`-o dist/`) also writes the
-full report to `dist/<name>.txt`.
+passes and 1 on any violation. To keep the full report in a file, add `-r`
+(`ticpak check -r` writes `<name>.ticpak.txt` beside the `.tic`; `-r PATH`
+writes it there). `-r` doesn't apply to `check FILE...`.
 
 ## What the report lines mean
 

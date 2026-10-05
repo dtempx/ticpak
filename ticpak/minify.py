@@ -282,13 +282,15 @@ def emit_readable(toks3):
     return "\n".join(lines)
 
 
-def strip_comments(s, keep=()):
+def strip_comments(s, keep=(), gone=None):
     """Remove every comment and nothing else. A line that held only comments
     is dropped, whitespace before a comment that ends its line goes with it,
     and a block comment between two tokens becomes one space. Strings - long
     ones included - are copied byte for byte, and so is every (start, end)
     span in keep (NOMINIFY-protected function bodies and kept comments,
-    sorted: Directives.keep())."""
+    sorted: Directives.keep()). gone: a list to append (offset, comment
+    bytes, whitespace bytes) to for each comment removed (the whitespace
+    that went with it; -1 for the space that replaced it)."""
     out, i, n = [], 0, len(s)
     keep, k = list(keep), 0
 
@@ -302,8 +304,10 @@ def strip_comments(s, keep=()):
         return j == 0 or out[j - 1] == "\n"
 
     def trim_trailing():
+        k = len(out)
         while out and out[-1] in " \t":
             out.pop()
+        return k - len(out)
 
     while i < n:
         c = s[i]
@@ -317,17 +321,24 @@ def strip_comments(s, keep=()):
             else:
                 nl = s.find("\n", i)
                 end = n if nl < 0 else nl
+            text = s[i:end].rstrip("\r")
             rest_end = s.find("\n", end)
             rest_end = n if rest_end < 0 else rest_end
             ends_line = not s[end:rest_end].strip(" \t\r")
             if ends_line:
                 blank = line_blank()
-                trim_trailing()
+                trimmed = trim_trailing()
                 # a line that was only comment loses its newline too
-                i = rest_end + 1 if blank else rest_end
+                j = min(n, rest_end + 1) if blank else rest_end
+                if gone is not None:
+                    gone.append((i, len(text.encode("utf-8")), trimmed + j - i - len(text)))
+                i = j
                 continue
-            if out and out[-1] not in " \t\n" and s[end] not in " \t":
+            space = bool(out) and out[-1] not in " \t\n" and s[end] not in " \t"
+            if space:
                 out.append(" ")                # keep the tokens apart
+            if gone is not None:
+                gone.append((i, len(text.encode("utf-8")), end - i - len(text) - space))
             i = end
             continue
         lb = long_bracket(s, i)
@@ -2828,6 +2839,187 @@ def layout(toks, width=120):
     return "\n".join(lines), first
 
 
+# What each option saved, by source line: measured only (savings=True), so
+# no pass depends on it.
+SAVINGS = ("comments", "whitespace", "constants", "extra", "rename")
+
+
+class Savings:
+    """What minification did to each source line, in UTF-8 bytes: lines
+    maps line -> {"source": bytes before, "final": bytes after, and an entry
+    per SAVINGS option for what it removed}. An option's entry is negative
+    where it added bytes (a constant longer than its name, an alias's
+    declaration), and for a whole module it can land on other lines than the
+    ones it came from: an inlined constant's bytes move to where it is read.
+    source - final is the sum of the options' entries.
+
+    left:  what the output is made of, [(label, bytes)], summing to its size
+    names: the names that stayed, longest total first, [(name, bytes)]
+    (left and names: past comments only; empty otherwise)"""
+
+    def __init__(self):
+        self.lines, self.left, self.names = {}, [], []
+
+    def add(self, key, counts):
+        """Add {line: bytes} to key."""
+        for line, n in counts.items():
+            if n:
+                d = self.lines.setdefault(line, {})
+                d[key] = d.get(key, 0) + n
+
+    def shift(self, by):
+        self.lines = {line + by: d for line, d in self.lines.items()}
+
+    def group(self, key_of):
+        """{key_of(line): {key: bytes}}, in order of each group's first line."""
+        out = {}
+        for line in sorted(self.lines):
+            g = out.setdefault(key_of(line), {})
+            for k, n in self.lines[line].items():
+                g[k] = g.get(k, 0) + n
+        return out
+
+    def total(self):
+        return self.group(lambda line: None).get(None, {})
+
+    @classmethod
+    def unchanged(cls, src):
+        sv = cls()
+        sv.add("source", _src_lines(src)); sv.add("final", _src_lines(src))
+        return sv
+
+
+def _nbytes(s):
+    return len(s.encode("utf-8"))
+
+
+def _src_lines(src):
+    """{line: bytes} of src, each line with its newline."""
+    rows = src.split("\n")
+    out = {i: _nbytes(r) + 1 for i, r in enumerate(rows, 1)}
+    out[len(rows)] -= 1
+    return out
+
+
+def _tok_lines(toks):
+    """{line: bytes} of the tokens' text, by the source line each came from."""
+    out = {}
+    for kind, text, line in toks:
+        if kind != "nl":
+            out[line] = out.get(line, 0) + _nbytes(text)
+    return out
+
+
+def _lin(*terms):
+    """The sum of (sign, {line: bytes}) terms, line by line."""
+    out = {}
+    for sign, d in terms:
+        for line, n in d.items():
+            out[line] = out.get(line, 0) + sign * n
+    return out
+
+
+def _comment_lines(src, keep):
+    """{line: bytes} of the comments the max pipeline drops (all but those
+    in keep's spans), by the line each starts on."""
+    starts, out = [a for a, _ in keep], {}
+    for line, _, text, a, _ in _scan_comments(src)[0]:
+        k = bisect.bisect_right(starts, a) - 1
+        if k < 0 or a >= keep[k][1]:
+            out[line] = out.get(line, 0) + _nbytes(text)
+    return out
+
+
+def _gone_lines(src, gone):
+    """strip_comments' gone list as ({line: comment bytes}, {line: whitespace bytes})."""
+    nls = [i for i, c in enumerate(src) if c == "\n"]
+    com, ws = {}, {}
+    for at, c, w in gone:
+        line = bisect.bisect_left(nls, at) + 1
+        com[line] = com.get(line, 0) + c
+        ws[line] = ws.get(line, 0) + w
+    return com, ws
+
+
+def _final_lines(text, toks):
+    """{source line: bytes} of the laid-out text: each token's bytes and the
+    whitespace (or kept comment) before the next go to the token's line."""
+    lines = []
+    for kind, t, line in strip_nl(toks):
+        if kind == "raw":
+            lines.extend([line] * len(lex(t)))
+        elif kind != "comment":
+            lines.append(line)
+    offs = []
+    lex(text, offsets=offs)
+    if not lines:
+        return {1: _nbytes(text)} if text else {}
+    bounds = [0] + offs[1:] + [len(text)]
+    out = {}
+    for k, line in enumerate(lines):
+        out[line] = out.get(line, 0) + _nbytes(text[bounds[k]:bounds[k + 1]])
+    return out
+
+
+def _made_of(prog, toks, size, whole, keep_names, renamed):
+    """(left, names) for Savings: the output's bytes by what they are, and
+    the names that stayed with their total bytes. renamed: the rename pass
+    ran."""
+    info = Info(prog, whole, keep_names)
+    fields, opaque = [0], {}       # opaque: id(binding) -> uses inside protected bodies
+
+    def stmts(blk):
+        for s in blk.stmts:
+            if type(s) is FuncStat:
+                fields[0] += sum(_nbytes(f) for f, _ in s.path)
+                fields[0] += _nbytes(s.method[0]) if s.method else 0
+            if type(s) not in (LocalFunc, FuncStat):
+                for sub in sub_blocks(s):
+                    stmts(sub)
+
+    def expr(e):
+        t = type(e)
+        if t in (Field, Method):
+            fields[0] += _nbytes(e.name)
+        elif t is Table:
+            fields[0] += sum(_nbytes(k[0]) for kind, k, _, _ in e.fields if kind == "named")
+        elif t is Func:
+            stmts(e.body)
+            # a protected body's names are in its raw text, not name tokens
+            for b in getattr(e, "raw_bindings", ()):
+                opaque[id(b)] = opaque.get(id(b), 0) + 1
+    stmts(prog)
+    walk_exprs(prog, expr)
+    api = renamable = 0
+    names = {}
+    for b in list(info.globals.values()) + info.locals:
+        n = _nbytes(b.name) * (len(b.occ) - opaque.get(id(b), 0))
+        if b.reserved:
+            api += n
+        elif b.renamable:
+            renamable += n
+        elif n:
+            names[b.name] = names.get(b.name, 0) + n
+    kinds = {}
+    for t in toks:
+        if t[0] != "nl":
+            kinds[t[0]] = kinds.get(t[0], 0) + _nbytes(t[1])
+    kept = sum(names.values())
+    left = [("strings", kinds.get("string", 0)),
+            ("numbers", kinds.get("number", 0)),
+            ("keywords", kinds.get("keyword", 0)),
+            ("operators and punctuation", kinds.get("op", 0)),
+            ("table field and method names", fields[0]),
+            ("TIC-80 and Lua names (spr, math, ...)", api),
+            ("names never renamed (functions, globals, NOMINIFY)", kept),
+            ("renamed variable names" if renamed else "variable names rename would shorten",
+             renamable),
+            ("goto labels", kinds.get("name", 0) - fields[0] - api - kept - renamable),
+            ("kept verbatim by NOMINIFY", kinds.get("raw", 0) + kinds.get("comment", 0)),
+            ("spaces and line breaks", size - sum(kinds.values()))]
+    return [x for x in left if x[1]], sorted(names.items(), key=lambda x: (-x[1], x[0]))
+
+
 class Report:
     def __init__(self):
         self.inlined, self.kept = {}, {}          # (name, line) -> details
@@ -2840,6 +3032,7 @@ class Report:
         self.disqualified, self.zero_write, self.dynamic = {}, [], None
         self.sizes = []          # (pass, chars)
         self.rounds = 0
+        self.savings = None      # Savings, when asked for
 
     off = 0                      # code line -> cart line offset (set by minify_cart_ex)
 
@@ -2848,6 +3041,8 @@ class Report:
         out.append("size by pass (characters of token text):")
         for p, n in self.sizes: out.append(f"  {p:<10} {n:>8,}")
         out.append(f"fixpoint rounds: {self.rounds}")
+        if self.savings is not None:
+            out.extend([""] + savings_text(self.savings))
         if self.dynamic:
             out.append(f"DYNAMIC ACCESS ({self.dynamic}): global passes disabled")
         def sect(title, rows):
@@ -2881,20 +3076,43 @@ class Report:
         return re.sub(r"\bline (\d+)", fix, "\n".join(out)) + "\n"
 
 
+def savings_text(sv, names=8):
+    """Savings totals as report lines: bytes saved per option, what the
+    output is made of, and the biggest names that stayed (no `line N`
+    text: Report.text rewrites those)."""
+    tot = sv.total()
+    out = ["bytes saved by option (UTF-8; negative: it added bytes):"]
+    out.append(f"  {'source':<12} {tot.get('source', 0):>8,}")
+    for k in SAVINGS:
+        out.append(f"  {k:<12} {tot.get(k, 0):>8,}")
+    out.append(f"  {'after':<12} {tot.get('final', 0):>8,}")
+    if sv.left:
+        out += ["", "what the minified code is made of (bytes):"]
+        out += [f"  {n:>8,}  {what}" for what, n in sv.left]
+    if sv.names[:names]:
+        out += ["", "biggest names that stayed (bytes, all uses):"]
+        out += [f"  {n:>8,}  {name}" for name, n in sv.names[:names]]
+    return out
+
+
 class Result:
-    def __init__(self, text, report, renames, line_map):
+    def __init__(self, text, report, renames, line_map, savings=None):
         self.text, self.report, self.renames, self.line_map = text, report, renames, line_map
+        self.savings = savings
 
 
 def toklen(toks):
     return sum(len(t[1]) for t in toks if t[0] != "nl")
 
 def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False,
-               reflow=True, nomi=None):
-    """The max pipeline. Returns a Result (text, report, renames, line_map).
-    reflow: pack lines to `width` (the whitespace option); False keeps the
-    source's line breaks. nomi: the source's NOMINIFY Directives (found here
-    when None)."""
+               reflow=True, nomi=None, savings=False, fixpoint_only=False):
+    """The max pipeline. Returns a Result (text, report, renames, line_map,
+    savings). reflow: pack lines to `width` (the whitespace option); False
+    keeps the source's line breaks. nomi: the source's NOMINIFY Directives
+    (found here when None). savings: also measure what each option saved
+    (Result.savings, Report.savings). fixpoint_only: stop after the
+    optimisation fixpoint and return its tokens' {line: bytes} (savings'
+    constants-alone run)."""
     passes = set(ALL_PASSES if passes is None else passes)
     unknown = passes - set(ALL_PASSES)
     if unknown:
@@ -2908,6 +3126,7 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
     toks = protect(src, toks, offs, nomi)
     rep.verbatim = [t[2] for t in toks if t[0] == "raw"]
     prog = reparse(toks)
+    stage = {"input": _tok_lines(toks)} if savings else None
 
     def info_of(prog):
         info = Info(prog, whole_program, nomi.names)
@@ -2946,7 +3165,11 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
             break
     else:
         raise AssertionError("minify: optimisation passes did not reach a fixpoint")
+    if fixpoint_only:
+        return _tok_lines(toks)
     rep.sizes.append(("optimised", toklen(toks)))
+    if savings:
+        stage["optimised"] = _tok_lines(toks)
 
     if "sugar" in passes:
         pass_sugar(prog, rep)
@@ -2967,12 +3190,16 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
     pass_tidy(prog)
     toks = emit_tree(prog); prog = reparse(strip_nl(toks))
     rep.sizes.append(("small", toklen(toks)))
+    if savings:
+        stage["small"] = _tok_lines(toks)
     if "rename" in passes:
         info = info_of(prog)
         pass_rename(info, rep)
         toks = emit_tree(prog)
         prog = reparse(strip_nl(toks))
     rep.sizes.append(("renamed", toklen(toks)))
+    if savings:
+        stage["renamed"] = _tok_lines(toks)
     rep.comments = [t[2] for t in toks if t[0] == "comment"]
 
     text, first_lines = layout(toks, width) if reflow else layout_lines(toks)
@@ -2990,31 +3217,79 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
             raise AssertionError(f"minify: output line {i + 1} would read as an asset chunk marker")
     rep.sizes.append(("laid out", len(text)))
     line_map = list(enumerate(first_lines, 1))
-    return Result(text, rep, rep.renames, line_map)
+    if savings:
+        rep.savings = _max_savings(src, text, toks, prog, stage, passes, nomi,
+                                   dict(whole_program=whole_program, width=width,
+                                        inline_all=inline_all, reflow=reflow))
+    return Result(text, rep, rep.renames, line_map, rep.savings)
+
+
+def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
+    """The max pipeline's Savings, from its stages' {line: bytes}: the
+    source, the tokens after protect() (input), after the fixpoint loop
+    (optimised), after sugar/alias/merge (small), after rename (renamed),
+    and the laid-out text. The fixpoint loop runs constants' pass (inline)
+    together with extra's fold/dce/shake, so with both on, a second run
+    with inline alone measures constants' share and extra gets the rest."""
+    sv = Savings()
+    source, com = _src_lines(src), _comment_lines(src, nomi.keep())
+    inp, opt, small, ren = (stage[k] for k in ("input", "optimised", "small", "renamed"))
+    final = _final_lines(text, toks)
+    fix = _lin((1, inp), (-1, opt))
+    if "inline" in passes and passes & {"fold", "dce", "shake"}:
+        alone = minify_max(src, passes={"inline"} | (passes & {"rename"}), nomi=nomi,
+                           fixpoint_only=True, **run)
+        const = _lin((1, inp), (-1, alone))
+    else:
+        const = fix if "inline" in passes else {}
+    # pass_tidy (redundant `;`, trailing table separators, empty else/do)
+    # runs with any option past comments: without extra's small passes, its
+    # few bytes count as whitespace, the layout's clean-up
+    tidy = "extra" if passes & {"sugar", "alias", "merge"} else "whitespace"
+    sv.add("source", source)
+    sv.add("comments", com)
+    sv.add("whitespace", _lin((1, source), (-1, com), (-1, inp), (1, ren), (-1, final)))
+    sv.add("constants", const)
+    sv.add("extra", _lin((1, fix), (-1, const)))
+    sv.add(tidy, _lin((1, opt), (-1, small)))
+    sv.add("rename", _lin((1, small), (-1, ren)))
+    sv.add("final", final)
+    sv.left, sv.names = _made_of(prog, toks, _nbytes(text), run["whole_program"],
+                                 nomi.names, "rename" in passes)
+    return sv
 
 
 # =============================================================================
 # Public API
 # =============================================================================
 
-def minify_ex(src, mode="max", whole_program=True, top_directive=True, **opts):
+def minify_ex(src, mode="max", whole_program=True, top_directive=True, savings=False,
+              **opts):
     """mode: anything parse_options() takes - 'comments,rename', 'max',
     or a set of OPTIONS (empty: passthrough). top_directive: a NOMINIFY in
     the source's top comment block leaves it all alone (minify_cart_ex says
-    False: a cart's top block is its header, checked there)."""
+    False: a cart's top block is its header, checked there). savings: also
+    measure what each option saved, by source line (Result.savings)."""
     o = parse_options(mode)
     if not o or (top_directive and top_block_nominify(src)):   # leave it alone
-        return Result(src, None, [], [])
+        return Result(src, None, [], [], Savings.unchanged(src) if savings else None)
     nomi = directives(src, top_directive)
     if o == {"comments"}:
-        out = strip_comments(src, nomi.keep())
+        gone = [] if savings else None
+        out = strip_comments(src, nomi.keep(), gone)
         if lex(out) != lex(src):                                   # safety net
             raise AssertionError("token stream changed - refusing to emit")
-        return Result(out, None, [], [])
+        sv = None
+        if savings:
+            sv, source = Savings(), _src_lines(src)
+            com, ws = _gone_lines(src, gone)
+            sv.add("source", source); sv.add("comments", com); sv.add("whitespace", ws)
+            sv.add("final", _lin((1, source), (-1, com), (-1, ws)))
+        return Result(out, None, [], [], sv)
     opts.setdefault("passes", [p for x in OPTIONS if x in o
                                for p in OPTION_PASSES.get(x, ())])
     return minify_max(src, whole_program=whole_program,
-                      reflow="whitespace" in o, nomi=nomi, **opts)
+                      reflow="whitespace" in o, nomi=nomi, savings=savings, **opts)
 
 def minify(src, mode="max", whole_program=True, **opts):
     """Minify Lua source; returns the text.
@@ -3077,26 +3352,28 @@ def _split_cart(text, meta_keys):
     header = "\n".join(l for l in lines[:h] if meta_re.match(l))
     return header, "\n".join(lines[h:]), chunks, h
 
-def minify_cart_ex(text, mode=("comments",), meta_keys=None, **opts):
+def minify_cart_ex(text, mode=("comments",), meta_keys=None, savings=False, **opts):
     """minify_cart() returning a Result whose line_map is in cart lines:
     [(output cart line, input cart line)]. A NOMINIFY in the cart's top
     comment block (its metadata header block) leaves the whole cart alone;
     the metadata tags' own values (a title or desc that says "nominify")
-    don't count."""
+    don't count. savings: Result.savings by cart line; the header block,
+    its dropped comments and the asset sections count as line 1's."""
+    unchanged = Savings.unchanged(text) if savings else None
     if not parse_options(mode):
-        return Result(text, None, [], [])
+        return Result(text, None, [], [], unchanged)
     keys = r"\w+" if meta_keys is None else "|".join(map(re.escape, meta_keys))
     meta_re = re.compile(r"^\s*--\s*(%s)\s*:" % keys, re.I)
     if top_block_nominify("\n".join("--" if meta_re.match(l) else l
                                     for l in text.split("\n"))):
-        return Result(text, None, [], [])
+        return Result(text, None, [], [], unchanged)
     header, code, chunks, h = _split_cart(text, meta_keys)
     if not header:
         raise ValueError("no metadata header comments found - refusing to minify")
     try:
         # the cart's top block was the header: the code's first comment
         # block, if any, is not a whole-module directive
-        r = minify_ex(code, mode=mode, top_directive=False, **opts)
+        r = minify_ex(code, mode=mode, top_directive=False, savings=savings, **opts)
     except NominifyError as e:                  # code lines -> cart lines
         raise NominifyError(e.line + h, e.msg) from None
     # code that starts with a kept comment stays apart from the header block,
@@ -3107,8 +3384,27 @@ def minify_cart_ex(text, mode=("comments",), meta_keys=None, **opts):
     r.renames = [(n, o, k, l + h) for n, o, k, l in r.renames]
     if r.report is not None:
         r.report.off = h
+    if savings:
+        _header_savings(r.savings, text, h, header + sep, chunks)
     r.text = header + sep + r.text + "\n" + chunks
     return r
+
+
+def _header_savings(sv, text, h, kept, chunks):
+    """Shift a cart's code Savings to cart lines and add the header block
+    (h lines, `kept` of it left), the newline after the code and the asset
+    sections, all as line 1's."""
+    sv.shift(h)
+    rows = text[:len(text) - len(chunks)].split("\n")[:h]
+    source = sum(_nbytes(r) + 1 for r in rows) + _nbytes(chunks)
+    com = sum(_nbytes(r.strip()) for r in rows if r.strip() and r not in kept.split("\n"))
+    final = _nbytes(kept) + 1 + _nbytes(chunks)
+    sv.add("source", {1: source})
+    sv.add("comments", {1: com})
+    sv.add("whitespace", {1: source - com - final})
+    sv.add("final", {1: final})
+    if sv.left:
+        sv.left.insert(0, ("metadata header and asset sections", final))
 
 def minify_cart(text, mode=("comments",), meta_keys=None, **opts):
     """Minify a cart's code, passing its metadata header and asset chunks through.
@@ -3175,11 +3471,14 @@ def main(argv=None):
     src = open(args[0], encoding="utf-8").read()
     try:
         if cart:
-            r = minify_cart_ex(src, mode=mode, **opts)
+            r = minify_cart_ex(src, mode=mode, savings=bool(report_path), **opts)
         else:
-            r = minify_ex(src, mode=mode, **opts)
+            r = minify_ex(src, mode=mode, savings=bool(report_path), **opts)
     except ValueError as e:
         sys.exit(f"minify: {e}")
     sys.stdout.write(r.text)
     if report_path and r.report is not None:
         open(report_path, "w", encoding="utf-8").write(r.report.text())
+    elif report_path and r.savings is not None:      # comments only: no pass report
+        open(report_path, "w", encoding="utf-8").write(
+            "\n".join(["ticpak minify report", ""] + savings_text(r.savings)) + "\n")

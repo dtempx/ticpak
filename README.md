@@ -192,8 +192,8 @@ asset data, stored as hex in comment lines.
 7. **Prints the summary** shown at the top of this page.
 
 By default only the `.tic` is kept. [`-o`](#output) can keep the bundle
-instead, or put the `.tic`, the bundle and the full check report together in
-a folder.
+instead, or put the `.tic` and the bundle together in a folder.
+[`-r`](#the-full-report--r) also writes the full report to a file.
 
 The bundle is a build artifact: never edit it, and rebuild it for each
 release. `main.lua` and the modules stay your sources.
@@ -226,9 +226,10 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 | *(no `-m`)* | no minification: the inlined source, verbatim |
 | `-o`, `--out PATH` | what to write: `NAME.tic`, `NAME.lua`, or a folder (see [Output](#output)); default `<name>.tic` beside `main.lua` |
 | `-n`, `--name NAME` | output name without extension (default: saveid, else title); not with `-o NAME.tic`/`NAME.lua`, which name the file themselves |
-| `-q`, `--quiet` | `check FILE...` only: print only violations |
+| `-r`, `--report [PATH]` | also write the full report: `<name>.ticpak.txt` beside the output, or `PATH` (a file, or a folder to put `<name>.ticpak.txt` in); see [The full report](#the-full-report--r) |
+| `-q`, `--quiet` | print nothing; the exit status says how it went (0 OK, 1 failed or a violation, 2 a usage error). An error that stops ticpak still prints its one line to stderr. Needs a command; not with `--verbose` |
 | `-v`, `--version` | print the version |
-| `--verbose` | also show progress and the check's detail (`check --verbose`: the full report) |
+| `--verbose` | also show progress, the check's detail and what minification saved (`check --verbose`: the full check report) |
 
 ```
 ticpak                          # interactive
@@ -236,13 +237,16 @@ ticpak build                    # build + check, if anything changed
 ticpak build -f                 # build + check, always
 ticpak build -f -m              # every minify option: the smallest cart
 ticpak build -f -m=comments,whitespace   # only those options
-ticpak build --verbose          # with progress and the check's detail
+ticpak build --verbose          # with progress, the check's detail, minify savings
+ticpak build -q                 # no output: just the exit status
+ticpak build -f -r              # also the full report: <name>.ticpak.txt beside the .tic
+ticpak build -f --report=r.txt  # the full report to r.txt instead
 ticpak check                    # summary of the existing .tic
 ticpak check --verbose          # ...and the full check report
 ticpak build -n mygame          # mygame.tic beside main.lua
 ticpak build -o mygame.tic      # just this .tic (path relative to the current folder)
 ticpak build -o mygame.lua      # just the bundle
-ticpak build -o dist/           # dist/<name>.tic, .lua and .txt
+ticpak build -o dist/           # dist/<name>.tic and .lua
 ticpak build path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak build enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
@@ -259,15 +263,17 @@ reference.
 
 `ticpak check` on its own (or given a folder) checks the project's built
 `<name>.tic` and prints the summary. With `-o`, it checks that build's output
-instead: `ticpak check -o dist/` checks `dist/<name>.tic` and rewrites
-`dist/<name>.txt`, and `ticpak check -o mygame.lua` gives a bundle the
-text-cart check below. Give it files instead and it checks exactly those,
-printing the checker's full report for each:
+instead: `ticpak check -o dist/` checks `dist/<name>.tic`, and
+`ticpak check -o mygame.lua` gives a bundle the text-cart check below.
+`-r` writes the check's full report to a file, as for `build` (with no
+savings table: `check` doesn't minify). Give it files instead and it checks
+exactly those, printing the checker's full report for each (`-r` doesn't
+apply; redirect the output to keep it):
 
 ```
 ticpak check main.lua                    # the source's header, before a build
 ticpak check main.lua mygame.tic         # source and package in one run
-ticpak check -q some/other.tic           # violations only; just the exit code
+ticpak check -q some/other.tic           # nothing printed; just the exit code
 ```
 
 A `.tic` gets the full check: every section against its size limit, the code
@@ -349,9 +355,55 @@ assets: 69K (63%)
   `not minified`.
 
 By default the summary, the status lines and any error or limit violation are
-all ticpak prints. `--verbose` adds the progress lines, every size, anything at 90%
-or more of a limit, and every warning. Console output is flush left, matching
-the `.txt` report a folder output keeps.
+all ticpak prints. `--verbose` adds the progress lines, every size, anything
+at 90% or more of a limit, every warning, and what minification saved
+([below](#what-minification-saved)). `-q` prints nothing at all, and the
+exit status alone says how the run went. [`-r`](#the-full-report--r) writes
+everything `--verbose` shows, plus the check in full, to a file. Console
+output is flush left, matching that report.
+
+### What minification saved
+
+With `--verbose` (and in the [`-r` report](#the-full-report--r)), a minified
+build shows, just before the summary, how many bytes each option took off
+each source file:
+
+```
+minify: bytes saved, by file and option (negative: the option added bytes)
+file                    source  comments  whitespace  constants  extra  rename   after
+main.lua                 3,752     2,924          87         10      0      53     678
+constants.lua            9,104     6,216       1,347      1,468      0      27      46
+board.lua               12,241     6,357       1,206        478    141     375   3,684
+...
+(added by ticpak)          974         0          75          0   -153      30   1,022
+total                   95,731    44,763      10,326      5,039    866   5,607  29,130
+```
+
+- **source** and **after** are each file's code in the bundle, before and
+  after minifying, in bytes of UTF-8. Each row's options add up to the
+  difference. The total row's `source` is the summary's `unminified` size.
+  `main.lua`'s row counts its metadata header but not its asset sections.
+- There is a column for each option you chose, plus **whitespace**, because
+  every option removes some: `comments` drops the lines that held only a
+  comment, and the others re-space every line. Whitespace also gets the
+  few bytes of redundant `;` and trailing table commas dropped along the way.
+- **constants** and **extra** are optimised together, each enabling more of
+  the other. With both on, ticpak measures `constants` alone and gives
+  `extra` the rest.
+- Options move bytes as well as remove them. An inlined constant's bytes go
+  to the file that reads it, so a file's `constants` can be negative. `extra`
+  can be negative where its aliases (`local a=spr`) are declared, which is
+  usually the `(added by ticpak)` row. That row is the bundle's own lines:
+  the `package.preload` wrapper around each module.
+- A module that `extra` removed because nothing uses it ends with
+  `(removed: unused)`.
+
+After the table comes what the minified code is made of: strings, numbers,
+keywords, operators, table field names, TIC-80 and Lua names, names never
+renamed (function names, globals), renamed variables, NOMINIFY code, spaces
+and line breaks. Then the biggest names that stayed, by total bytes. That
+shows where the rest of the code budget goes. A module built on its own gets
+a one-row table.
 
 ### Interactive mode
 
@@ -372,12 +424,13 @@ Run `ticpak` with no command. If the cart has never been built, it prints
    5) [ ] extra       further optimisations
 ? Output:
   1) mygame.tic only, beside main.lua  [default]
-  2) a folder: mygame.tic, mygame.lua (the bundle), mygame.txt (the check report)
+  2) a folder: mygame.tic and mygame.lua (the bundle)
 ? Output folder: [dist/]
 ```
 
 `Output folder` is asked only if you choose the folder. Options given on the
-command line (`-m`, `-n`, `-o`) become the defaults; `-o NAME.tic` or
+command line (`-m`, `-n`, `-o`) become the defaults, and `-r` writes the
+report as in `build`; `-o NAME.tic` or
 `-o NAME.lua` already says what to write, so then only the minification is
 asked. Without questionary, type the numbers to toggle (`2,5`) and press
 Enter on an empty line to accept.
@@ -395,7 +448,8 @@ exists, it asks nothing. It prints the status lines
 and `hint: ticpak build -f to force rebuild`, and exits.
 
 With no terminal (piped input, CI) it doesn't guess. It tells you to use
-`build` or `check` and exits with status 2. On Windows, a standalone Git Bash
+`build` or `check` and exits with status 2. `-q` needs a command too, since
+the questions can't be asked quietly. On Windows, a standalone Git Bash
 (mintty) window looks like no terminal to Python: run `winpty ticpak` there,
 or use PowerShell, Windows Terminal or VS Code's terminal.
 
@@ -517,16 +571,15 @@ with `-DBUILD_PRO=On`. ticpak looks for it in this order:
 | *(none)* | `<name>.tic` only, in the folder holding `main.lua` | `mygame.tic` |
 | `NAME.tic` | that `.tic` only | `-o mygame.tic`, `-o release/v2.tic` |
 | `NAME.lua` | the bundle only | `-o mygame.lua` |
-| a folder: ends in `/`, or has neither extension | `<name>.tic`, `<name>.lua` and `<name>.txt` in it, plus the decode maps | `-o dist/`, `-o dist` |
+| a folder: ends in `/`, or has neither extension | `<name>.tic` and `<name>.lua` in it, plus the decode maps | `-o dist/`, `-o dist` |
 
 A path given to `-o` is relative to the current folder, and a file name there
 is the output's name (so `-n` goes only with a folder or the default). Every
 kind of build boots the bundle and checks a `.tic` made from it. A file not
 kept is never written to your folders: the bundle for a `.tic`-only build is
 held in memory and written only into TIC-80's temporary folder, and a
-`.lua`-only build checks a temporary `.tic` and deletes it. No `.txt` report
-is written outside a folder build; the summary is still printed. A build
-stops rather than overwrite `main.lua` or one of its modules.
+`.lua`-only build checks a temporary `.tic` and deletes it. A build stops
+rather than overwrite `main.lua` or one of its modules.
 
 A folder build writes these files, all named after the output name:
 
@@ -534,9 +587,12 @@ A folder build writes these files, all named after the output name:
 |---|---|---|
 | `<name>.lua` | the bundle: your whole game as one text cart | every build |
 | `<name>.tic` | the same cart in TIC-80's binary format: **the file to upload** | every build |
-| `<name>.txt` | the check's full report, then the summary | every build and `ticpak check -o DIR` |
-| `<name>.minify.txt` | the minifier's report: what each pass did | builds with any minify option past `comments` |
+| `<name>.minify.txt` | the minifier's report: what each option saved and each pass did | builds with any minify option past `comments` |
 | `<name>.minify.json` | line and rename maps for decoding runtime errors | builds with any minify option past `comments` |
+
+`-r` adds `<name>.ticpak.txt`, [the full report](#the-full-report--r), to
+any build: beside the output (in the folder, for a folder build), or where
+`-r PATH` says.
 
 Every output is regenerated from your sources, so add it to your
 `.gitignore` (`*.tic`, `dist/`) and never edit it. A folder build that writes
@@ -578,13 +634,33 @@ folder build or `-o NAME.lua`) is for reading and decoding errors, and for
 exports: load it in TIC-80 and run `export html <name>` or
 `export win <name>` for a web or native build (both need network access).
 
-### The check report: `<name>.txt`
+### The full report: `-r`
 
-A folder build writes this. It is the check of the `.tic` in full: every asset section's size against
-its limit, how the code is stored, which memory banks carry data, every
-header tag, whether there is a cover screenshot, any violations, and then
-the summary. `--verbose` prints the parts that need attention, and
-`ticpak check --verbose` prints all of it.
+`build` and `check` write nothing but the cart unless you ask. `-r` (or
+`--report`) also writes the full report, and prints a `report:` line naming
+the file:
+
+| Form | Writes |
+|---|---|
+| `-r` | `<name>.ticpak.txt` beside the output: beside `main.lua` by default, in the folder for `-o dist/`, beside the file for `-o NAME.tic`/`NAME.lua` |
+| `-r PATH`, `--report=PATH` | that file |
+| `-r DIR/` (or an existing folder) | `DIR/<name>.ticpak.txt` |
+
+A `PATH` is relative to the current folder. One ending in `.lua` or `.tic`
+is an error: it is the `SOURCE` or an output read as the report's path. Put
+`SOURCE` before `-r`, or write `--report=PATH`.
+
+The report is the check of the `.tic` in full: every asset section's size
+against its limit, how the code is stored, which memory banks carry data,
+every header tag, whether there is a cover screenshot and any violations.
+After a minified build, [what minification saved](#what-minification-saved)
+comes next, then the summary. `--verbose` prints the parts that need
+attention, and `ticpak check --verbose` prints all of the check.
+
+An up-to-date `build -r` writes the report of the `.tic` already built,
+which has no savings table because nothing was minified in that run. Add
+`-f` to rebuild. A module built on its own gets a report with its savings
+table and sizes.
 
 ```
 check: dist/mygame.tic
@@ -603,6 +679,8 @@ title: My Game
 screenshot (SCREEN) present
 all checks OK
 
+minify: bytes saved, by file and option (negative: the option added bytes)
+...
 size: 134K
 ...
 ```
@@ -630,7 +708,9 @@ variable. `<name>.minify.json` translates both:
   source is near the line you found.
 
 `<name>.minify.txt` is the minifier's report for people: the code size after
-each pass, then every constant inlined, every piece of code or variable
+each pass, the bytes each option saved, what the minified code is made of,
+the biggest names that stayed, then every constant inlined, every piece of
+code or variable
 removed, every API function aliased, and everything kept by `NOMINIFY`, each
 with its `file:line`. Read it when you want to know what happened to a
 particular name, or attach it when reporting a minifier bug. The file
@@ -671,7 +751,7 @@ Or copy `skills/ticpak/` into your agent's skills directory yourself
 | `ticpak/cli.py` | the command line, `--help`, the interactive questions, `main()` |
 | `ticpak/bundle.py` | finds the cart, resolves `-o` into the outputs to keep, inlines the modules, minifies, writes `<name>.lua` and the decode maps; a module on its own; the up-to-date check; the `-- <` guard |
 | `ticpak/run.py` | finds TIC-80 Pro, boots the bundle headless, saves `<name>.tic` |
-| `ticpak/report.py` | the check report in `<name>.txt` (folder builds), the summary, the `--verbose` detail |
+| `ticpak/report.py` | the summary, the `--verbose` detail (the minify savings table included), the `-r` report file |
 | `ticpak/header.py` | the metadata header: the output name, missing tags, filling them in |
 | `ticpak/console.py` | console output and the prompts (questionary or plain) |
 | `ticpak/check.py` | the `.tic` limit and header checker (`ticpak check FILE...`) |

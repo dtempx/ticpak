@@ -18,7 +18,7 @@ bundle can be checked with the same rule:
 
     ticpak check <game>.tic
     ticpak check main.lua                  # header + bank usage
-    ticpak check -q <game>.tic             # violations and the exit code only
+    ticpak check -q <game>.tic             # nothing printed: just the exit code
 
 Banks and PRO. Every TIC-80 build's cart loader reads all 8 banks, and sync()
 works in every build: TIC_BANKS is 8 unconditionally in tic.h, and neither
