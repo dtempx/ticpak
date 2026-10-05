@@ -475,7 +475,7 @@ def report_hint(t):
     beside the output (<name>.ticpak.txt), if there is one."""
     path = os.path.join(t.dist_dir, t.name + ".ticpak.txt")
     if t.txt is None and os.path.isfile(path):
-        print("hint: more info in " + highlight(fwd(path)))
+        print("hint: " + highlight(fwd(path)) + " for more info")
 
 
 def options_note(last, minify, skipped):
