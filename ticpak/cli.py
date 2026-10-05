@@ -95,14 +95,17 @@ def report_arg(text):
 
 
 def ask_minify(ui, minify):
-    """Minification: all options, none, or the individual options as
-    checkboxes. minify is the default; returns the chosen options."""
-    presets = {"all": minifier.ALL_OPTIONS, "none": frozenset()}
+    """Minification: all options, comments only, none, or the individual
+    options as checkboxes. minify is the default; returns the chosen options."""
+    presets = {"all": minifier.ALL_OPTIONS,
+               "comments": minifier.parse_options(["comments"]),
+               "none": frozenset()}
     current = next((k for k, v in presets.items() if v == minify), "pick")
     choice = ui.select("Minification:", [
-        ("all", "all  - every option (smallest cart)"),
-        ("none", "none - no minification (the inlined source verbatim)"),
-        ("pick", "choose individual options..."),
+        ("all", "all      - all minification options (smallest cart)"),
+        ("comments", "comments - remove comments only"),
+        ("none", "none     - no minification (the bundled source verbatim)"),
+        ("pick", "choose individual minification options..."),
     ], default=current)
     if choice == "pick":
         picked = ui.checkbox("Minify options (space toggles, enter accepts):",

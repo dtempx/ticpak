@@ -413,9 +413,10 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 ? Output name (no extension): [mygame]
 ? Minification:
-  1) all  - every option (smallest cart)  [default]
-  2) none - no minification (the inlined source verbatim)
-  3) choose individual options...
+  1) all      - all minification options (smallest cart)  [default]
+  2) comments - remove comments only
+  3) none     - no minification (the bundled source verbatim)
+  4) choose individual minification options...
 ? Minify options (space toggles, enter accepts):
    1) [x] comments    remove comments (keeps the metadata header and asset blocks)
    2) [x] rename      rename variables to the shortest free names (1-2 letters)
