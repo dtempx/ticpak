@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Console helpers for ticpak: message paths, the --verbose switch, the
-flush-left output filter, and the interactive prompts.
+flush-left output filter, the progress bar, and the interactive prompts.
 """
 import os
 import re
+import shutil
 import sys
+import threading
+import time
 
 VERBOSE = False       # --verbose: progress and the check's detail on screen
+_bar = None           # the Progress on screen, if any
 
 
 def detail(*args, **kw):
@@ -45,9 +49,20 @@ class FlatStdout:
 
     def write(self, s):
         self.buf += s
-        while "\n" in self.buf:
-            line, self.buf = self.buf.split("\n", 1)
-            self.inner.write(flat_line(line) + "\n")
+        if "\n" not in self.buf:
+            return len(s)
+        bar = _bar if _bar is not None and _bar.stream is self.inner else None
+        if bar:                         # print the lines above the progress bar
+            bar.lock.acquire()
+            bar.clear()
+        try:
+            while "\n" in self.buf:
+                line, self.buf = self.buf.split("\n", 1)
+                self.inner.write(flat_line(line) + "\n")
+        finally:
+            if bar:
+                bar.draw()
+                bar.lock.release()
         return len(s)
 
     def flush(self):
@@ -60,37 +75,151 @@ class FlatStdout:
         return getattr(self.inner, name)
 
 
-def highlight(text):
-    """text in bright cyan when stdout is a terminal that shows colour (not
-    with NO_COLOR set, or when piped or redirected); else text as is."""
-    if os.environ.get("NO_COLOR") or not getattr(sys.stdout, "isatty", lambda: False)():
-        return text
-    if os.name == "nt":                 # turn on the console's ANSI escapes
+def colour(stream):
+    """Does stream show ANSI colour? A terminal, without NO_COLOR set (not
+    when piped or redirected). (Windows) turns on the console's escapes."""
+    if os.environ.get("NO_COLOR") or not getattr(stream, "isatty", lambda: False)():
+        return False
+    if os.name == "nt":
         try:
             import ctypes
+            import msvcrt
             k32 = ctypes.windll.kernel32
-            handle, mode = k32.GetStdHandle(-11), ctypes.c_uint()
+            handle, mode = msvcrt.get_osfhandle(stream.fileno()), ctypes.c_uint()
             if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
-                return text
+                return False
             if not mode.value & 4 and not k32.SetConsoleMode(handle, mode.value | 4):
-                return text
+                return False
         except Exception:
-            return text
-    return f"\033[96m{text}\033[0m"
+            return False
+    return True
+
+
+def highlight(text):
+    """text in bright cyan when stdout shows colour; else text as is."""
+    return f"\033[96m{text}\033[0m" if colour(sys.stdout) else text
+
+
+def is_console(stream):
+    """Is stream a terminal? (Windows) isatty() is also true for NUL, so
+    require a real console there."""
+    try:
+        if not stream.isatty():
+            return False
+        if os.name != "nt":
+            return True
+        import ctypes
+        import msvcrt
+        mode = ctypes.c_uint()
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 def has_terminal():
-    """Is someone at a terminal to answer prompts? (Windows) isatty() is also
-    true for NUL, so require a real console there."""
-    if not sys.stdin.isatty():
-        return False
-    if os.name != "nt":
-        return True
-    import ctypes
-    import msvcrt
-    mode = ctypes.c_uint()
-    handle = msvcrt.get_osfhandle(sys.stdin.fileno())
-    return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    """Is someone at a terminal to answer prompts?"""
+    return is_console(sys.stdin)
+
+
+class Progress:
+    """A progress bar and status line, in gray, redrawn in place below the
+    output while a build runs, and gone when it ends. Only on a terminal:
+    it draws on the stream behind sys.stdout, so -q (devnull) and a pipe or
+    file get none. FlatStdout prints lines above it.
+
+    plan: [(step, expected seconds)] in order. The bar fills by time within
+    each step (never quite to its end), so a 10 s TIC-80 boot still moves.
+    Use as a context manager; step() moves it on."""
+
+    def __init__(self, plan):
+        out = sys.stdout
+        self.stream = out.inner if isinstance(out, FlatStdout) else out
+        self.on = is_console(self.stream)
+        self.plan = dict(plan)
+        self.done, self.key, self.message, self.start = 0.0, None, "", 0.0
+        self.shown = 0                  # length of the line on screen
+        self.lock = threading.RLock()
+        self.stop = threading.Event()
+        if self.on:
+            self.gray = colour(self.stream)
+            try:
+                "█░".encode(self.stream.encoding or "ascii")
+                self.chars = "█░"
+            except (LookupError, UnicodeError):
+                self.chars = "#-"
+
+    def __enter__(self):
+        global _bar
+        if self.on:
+            _bar = self
+            threading.Thread(target=self._tick, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        global _bar
+        if self.on:
+            self.stop.set()
+            with self.lock:
+                self.clear()
+                _bar = None
+
+    def _tick(self):
+        while not self.stop.wait(0.1):
+            with self.lock:
+                if not self.stop.is_set():
+                    self.draw()
+
+    def step(self, key, message, seconds=None):
+        """Start step key (seconds: a better estimate than the plan's)."""
+        if not self.on:
+            return
+        with self.lock:
+            if self.key is not None:
+                self.done += self.plan[self.key]
+            if seconds is not None or key not in self.plan:
+                self.plan[key] = max(seconds or 0.0, 0.05)
+            self.key, self.message, self.start = key, message, time.monotonic()
+            self.draw()
+
+    def fraction(self):
+        part = 0.0
+        if self.key is not None:
+            expect = self.plan[self.key]
+            part = expect * min((time.monotonic() - self.start) / expect, 0.97)
+        return min((self.done + part) / (sum(self.plan.values()) or 1), 1.0)
+
+    def draw(self):
+        if not self.on or self.key is None:
+            return
+        f = self.fraction()
+        width = 24
+        fill = int(f * width)
+        line = (f"[{self.chars[0] * fill}{self.chars[1] * (width - fill)}]"
+                f" {int(f * 100):3d}%  {self.message}")
+        line = line[:max(shutil.get_terminal_size().columns - 1, 10)]
+        pad = " " * max(self.shown - len(line), 0)
+        text = f"\033[90m{line}\033[0m" if self.gray else line
+        self._write("\r" + text + pad + "\r")
+        self.shown = len(line)
+
+    def clear(self):
+        if self.shown:
+            self._write("\r" + " " * self.shown + "\r")
+            self.shown = 0
+
+    def _write(self, s):
+        try:
+            self.stream.write(s)
+            self.stream.flush()
+        except (OSError, ValueError):
+            self.on = False
+
+
+def step(key, message, seconds=None):
+    """Move the progress bar on screen, if any, to step key (see Progress)."""
+    if _bar is not None:
+        _bar.step(key, message, seconds)
 
 
 class Prompts:

@@ -13,10 +13,11 @@ from . import __version__
 from . import minify as minifier
 from .check import (META_LINE_RE, STAMP_RE, TEXT_SECTION_RE, check_header, parse_header,
                     parse_tic, read_stamp, tic_code)
-from .console import detail, fwd, show
+from .console import detail, fwd, show, step
 from .header import CHUNK_RE, META_KEYS, cart_code
 
 FREE_LIMIT = 65536  # the free editor's code cap (PRO edits up to 512 KB; every player loads it all)
+MINIFY_RATE = 300_000         # bytes/s minify_max measures savings at, for the progress bar
 ADDED = "(added by ticpak)"   # the savings row for the bundle's own lines: preload wrappers
 DEFAULT_DIR = "dist/"         # the interactive build's default output folder
 
@@ -343,9 +344,13 @@ def bundle(t, minify_options=frozenset()):
     """Build the bundle into t.code, and write it to t.lua (plus, for a folder
     output, the decode maps) when the target keeps one. Returns its code size
     before minification (bytes)."""
+    step("inline", "inlining modules")
     out, chunks, names, origin = assemble(t)
     raw = len(out.encode("utf-8"))
 
+    if minify_options:
+        step("minify", f"minifying {len(names)} modules ({minify_label(minify_options)})",
+             raw / MINIFY_RATE)
     try:
         res = minifier.minify_cart_ex(out, mode=minify_options, meta_keys=META_KEYS,
                                       savings=bool(minify_options))
@@ -422,6 +427,7 @@ def minify_module(t, minify_options=frozenset()):
     (size before, size after) in bytes."""
     src = open(t.cart, encoding="utf-8").read()
     module_sections(src, os.path.basename(t.cart))
+    step("minify", f"minifying {os.path.basename(t.cart)}", len(src) / MINIFY_RATE)
     try:
         res = minifier.minify_ex(src, mode=minify_options, whole_program=False,
                                  savings=bool(minify_options))

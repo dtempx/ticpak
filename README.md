@@ -418,6 +418,15 @@ exit status alone says how the run went. [`-r`](#the-full-report--r) writes
 everything `--verbose` shows, plus the check in full, to a file. Console
 output is flush left, matching that report.
 
+While a build runs, a gray progress bar on the line below the output says
+what it is doing (`inlining modules`, `minifying`, `booting the bundle
+headless in TIC-80`, `saving <name>.tic`) and is erased when the build ends,
+so it leaves nothing behind. The boot takes about 10 seconds whatever the
+cart's size, so most of the bar is that step. The bar shows only on a
+terminal: never with `-q`, and never when the output is piped or redirected
+(CI logs, `> log.txt`). Without colour (`NO_COLOR`) it is not gray, and on a
+console that can't show block characters it is drawn with `#` and `-`.
+
 ### What minification saved
 
 With `--verbose` (and in the [`-r` report](#the-full-report--r)), a minified

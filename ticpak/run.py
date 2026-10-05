@@ -14,10 +14,11 @@ if os.name != "nt":                 # the pty route below is POSIX-only
     import pty
     import select
 
-from .console import detail, show
+from .console import detail, show, step
 from .header import slug
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+BOOT_SECONDS = 10       # the boot run's length: TIC-80's --cli loop never exits
 
 
 def tic80_exe():
@@ -113,8 +114,9 @@ def verify(t, tic=None):
     else:
         shutil.copy(t.lua, os.path.join(tmp, lua))
     try:
+        step("boot", "booting the bundle headless in TIC-80")
         cmd = f"load {lua} & run"
-        out = _run_tty([exe, "--fs=.", "--cli", "--skip", "--cmd", cmd], tmp, 10)
+        out = _run_tty([exe, "--fs=.", "--cli", "--skip", "--cmd", cmd], tmp, BOOT_SECONDS)
         bad = ('[string "' in out or "stack traceback" in out
                or "not found" in out or re.search(r"\berror\b", out, re.I))
         if bad or "loaded!" not in out:
@@ -125,6 +127,8 @@ def verify(t, tic=None):
             sys.exit(1)
         detail(f"bundle: boots headless from a directory containing only {lua}")
         name = base + ".tic"
+        step("save", f"saving {os.path.basename(tic)}" if tic == t.tic
+             else "saving a .tic to check")
         # This run ends itself (`& exit`), so the ceiling only has to be
         # above the worst case - saving a big cart on a thermally
         # throttled SBC has been seen to take >20 s.

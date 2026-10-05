@@ -29,11 +29,11 @@ from .bundle import (DEFAULT_DIR, Target, built_options, built_target, bundle, f
                      freshness, is_cart, minify_flag, minify_module, options_label,
                      out_kind, save_bundle, stub_requires, unminified_size)
 from .check import check_lua, check_tic
-from .console import FlatStdout, Prompts, fwd, has_terminal, highlight, show
+from .console import FlatStdout, Progress, Prompts, fwd, has_terminal, highlight, show
 from .header import cart_code, ensure_header, package_name, slug
 from .report import (check_summary, kb, made_of_lines, savings_table, size_summary,
                      write_report)
-from .run import verify
+from .run import BOOT_SECONDS, verify
 
 EXAMPLES = """examples (run from the port's directory, the one holding main.lua):
   ticpak                          interactive: status, or asks to build
@@ -371,26 +371,30 @@ def main(argv=None):
         force_hint(build_command(args.source, args.minify, t.name, package_name(meta),
                                  args.out, args.report, force=True))
         return
+    # Just the .lua: boot it and check a .tic made from it all the same in
+    # tmp, then drop the .tic.
+    tmp = None if t.tic else tempfile.mkdtemp(prefix="ticpak-check-")
     try:
-        unminified = bundle(t, minify_options=args.minify)
-        if t.tic:
-            verify(t)
-            check_summary(t, unminified)
-        else:
-            # Just the .lua: boot it and check a .tic made from it all the
-            # same, then drop the .tic.
-            tmp = tempfile.mkdtemp(prefix="ticpak-check-")
-            try:
-                tic = verify(t, os.path.join(tmp, "check.tic"))
+        with Progress(build_plan(args.minify)):
+            unminified = bundle(t, minify_options=args.minify)
+            tic = verify(t, tmp and os.path.join(tmp, "check.tic"))
+            if tmp:
                 save_bundle(t)
-                check_summary(t, unminified, tic=tic)
-            finally:
-                shutil.rmtree(tmp, ignore_errors=True)
+        check_summary(t, unminified, tic=tic)
     finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
         # Also after a failed boot or a limit violation: the fix is usually
         # in the code, and the rebuild wants the same settings.
         if rerun:
             rerun_hint(rerun)
+
+
+def build_plan(minify):
+    """The progress bar's steps for a build, with rough seconds for each
+    (bundle() puts a figure on minify once it knows the code's size)."""
+    return ([("inline", 0.05)] + ([("minify", 1.0)] if minify else [])
+            + [("boot", BOOT_SECONDS), ("save", 1.0)])
 
 
 def force_hint(command):
@@ -466,7 +470,8 @@ def build_module(command, args, path, interactive):
         force_hint(build_command(args.source, args.minify, name, default_name, args.out,
                                  args.report, force=True))
         return
-    before, after = minify_module(t, args.minify)
+    with Progress([("minify", 1.0)]):
+        before, after = minify_module(t, args.minify)
     saved = []
     if t.savings is not None:
         groups, sv, options = t.savings
