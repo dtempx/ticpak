@@ -5,11 +5,11 @@
     python tests/options/test_options.py -k Behaviour
     TICPAK_BOOT=1 python tests/options/test_options.py -k Boot
 
-The six options (comments, rename-vars, rename-functions, constants,
-whitespace, extra) give 64 subsets; since every option but `comments` implies
-it, they collapse to 33 distinct effective sets, and each runs on each cart in
-samples/ (built by make_samples.py) and on the ticpak project in project/.
-Per combination:
+The seven options (comments, rename-vars, rename-functions, rename-tables,
+constants, whitespace, extra) give 128 subsets; since every option but
+`comments` implies it, they collapse to 65 distinct effective sets, and each
+runs on each cart in samples/ (built by make_samples.py) and on the ticpak
+project in project/. Per combination:
 
   OptionParsing  empty set, the `default` and `max` presets, unknown names
                  rejected, implied `comments`, raw subset == its effective set
@@ -28,9 +28,14 @@ Per combination:
                  deterministic; a pass report exactly when an option past
                  `comments` is on
   OptionEffects  each option's visible signature, on and off: comments gone,
-                 renameme_* and renamefn_* shortened, CONST_* inlined and
-                 removed, lines
+                 renameme_*, renamefn_* and renamekey_* shortened, keepkey_*
+                 kept, CONST_* inlined and removed, lines
                  packed to 120 columns, unused/dead code and call sugar
+  RenameTables   rename-tables (spec R13) on small programs: what is
+                 renamed and what keeps its name (library keys, metamethods,
+                 keys also written as strings, keys a built string could
+                 spell), each reason the pass turns off, the decode map,
+                 and the same behaviour under real Lua 5.3
   Behaviour      the original and the minified cart run under real Lua 5.3
                  (lupa) against a logging stand-in TIC-80 API (harness.lua);
                  the logs must be identical, value types included
@@ -246,9 +251,11 @@ class TestOptionParsing(unittest.TestCase):
         self.assertEqual(M.parse_options([]), frozenset())
         self.assertEqual(M.ALL_OPTIONS, set(OPTIONS))
         self.assertEqual(M.parse_options("max"), M.ALL_OPTIONS)
-        self.assertEqual(M.parse_options("default"), M.ALL_OPTIONS - {"rename-functions"})
+        self.assertEqual(M.parse_options("default"),
+                         M.ALL_OPTIONS - {"rename-functions", "rename-tables"})
         self.assertEqual(M.parse_options("default"), M.DEFAULT_OPTIONS)
-        self.assertEqual(M.parse_options("default,rename-functions"), M.ALL_OPTIONS)
+        self.assertEqual(M.parse_options("default,rename-functions,rename-tables"),
+                         M.ALL_OPTIONS)
 
     def test_spelling(self):
         self.assertEqual(M.parse_options(" rename-vars , whitespace "),
@@ -257,7 +264,7 @@ class TestOptionParsing(unittest.TestCase):
 
     def test_unknown_rejected(self):
         for bad in ("bogus", "dead", "fold", "comments,unused", "Rename-vars",
-                    "rename", "all", "none", "rename_vars"):
+                    "rename", "all", "none", "rename_vars", "fields", "rename-keys"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 M.parse_options(bad)
 
@@ -274,9 +281,9 @@ class TestOptionParsing(unittest.TestCase):
                     raw = M.minify_cart_ex(SAMPLES[name], mode=s, meta_keys=META_KEYS)
                     self.assertEqual(raw.text, minified(name, M.parse_options(s)).text)
 
-    def test_thirty_three_effective_sets(self):
-        self.assertEqual(len(SUBSETS), 64)
-        self.assertEqual(len(EFFECTIVE), 33)
+    def test_sixty_five_effective_sets(self):
+        self.assertEqual(len(SUBSETS), 128)
+        self.assertEqual(len(EFFECTIVE), 65)
 
 
 class TestCommandLine(unittest.TestCase):
@@ -299,19 +306,24 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(self.parse()[1].minify, M.DEFAULT_OPTIONS)
 
     def test_bare_is_default(self):
-        """A bare --minify: every option but rename-functions."""
+        """A bare --minify: every option but the opt-in rename-functions and
+        rename-tables."""
         for argv in (["--minify"], ["bundle", "-f", "--minify"],
                      ["bundle", "src/main.lua", "--minify"],
                      ["bundle", "-m"], ["bundle", "-m", "-f"]):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, M.DEFAULT_OPTIONS)
         self.assertNotIn("rename-functions", M.DEFAULT_OPTIONS)
+        self.assertNotIn("rename-tables", M.DEFAULT_OPTIONS)
+        self.assertIn("rename-tables", M.ALL_OPTIONS)
 
     def test_presets(self):
         for argv, want in ((["-m=max"], M.ALL_OPTIONS), (["--minify=max"], M.ALL_OPTIONS),
                            (["-m", "max"], M.ALL_OPTIONS),
                            (["-m=default"], M.DEFAULT_OPTIONS),
-                           (["-m=default,rename-functions"], M.ALL_OPTIONS)):
+                           (["-m=default,rename-functions"],
+                            M.ALL_OPTIONS - {"rename-tables"}),
+                           (["-m=default,rename-functions,rename-tables"], M.ALL_OPTIONS)):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, want)
 
@@ -321,6 +333,7 @@ class TestCommandLine(unittest.TestCase):
                            (["-m", "rename-vars,extra"], {"comments", "rename-vars", "extra"}),
                            (["-m=rename-vars"], {"comments", "rename-vars"}),
                            (["-mrename-functions"], {"comments", "rename-functions"}),
+                           (["-m=rename-tables"], {"comments", "rename-tables"}),
                            (["--minify", "whitespace"], {"comments", "whitespace"}),
                            (["--minify=comments"], {"comments"})):
             with self.subTest(argv=argv):
@@ -472,6 +485,16 @@ class TestMinifyCommand(unittest.TestCase):
                 out = self.run_cmd(*flags, path)
                 self.assertNotIn("renamefn_hud", out)
                 self.assertIn("function TIC()", out)
+
+    def test_keys_renamed_only_on_request(self):
+        """No flag: the default options, which keep table keys; --max and
+        --rename-tables rename them."""
+        path = self.write("game.lua", self.HEADER + "local hero = {renamekey_health = 3}\n"
+                          "function TIC() trace(hero.renamekey_health) end\n")
+        self.assertIn("renamekey_health", self.run_cmd(path))
+        for flags in (["--max"], ["--rename-tables"]):
+            with self.subTest(flags=flags):
+                self.assertNotIn("renamekey_health", self.run_cmd(*flags, path))
 
     def test_old_flags_rejected(self):
         path = self.write("title.lua", self.MODULE)
@@ -849,6 +872,27 @@ class TestOptionEffects(unittest.TestCase):
                 self.assertEqual(names(r"\bkeepfn_\w+", out), kept, "NOMINIFY function lost")
         self.assertTrue(seen)
 
+    def test_rename_tables(self):
+        """renamekey_* keys: renamed by rename-tables only, whatever else is
+        on; keepkey_* (also written as a string) never."""
+        seen = False
+        for name, opts in combos():
+            src = code_of(SAMPLES[name])
+            marked = names(r"\brenamekey_\w+", src)
+            kept = names(r"\bkeepkey_\w+", src)
+            seen |= bool(marked)
+            with self.subTest(sample=name, opts=label(opts)):
+                r = minified(name, opts)
+                out = code_of(r.text)
+                left = names(r"\brenamekey_\w+", out)
+                if "rename-tables" in opts and marked:
+                    self.assertIsNone(r.report.keys_off)
+                    self.assertFalse(left, "not renamed")
+                else:
+                    self.assertEqual(left, marked)
+                self.assertEqual(names(r"\bkeepkey_\w+", out), kept, "kept key lost")
+        self.assertTrue(seen)
+
     def test_constants(self):
         for name, opts in combos():
             consts = names(r"\bCONST_\w+", code_of(SAMPLES[name]))
@@ -896,6 +940,150 @@ class TestOptionEffects(unittest.TestCase):
             with self.subTest(sample=name, opts=label(opts)):
                 src = [i for _, i in minified(name, opts).line_map]
                 self.assertEqual(src, sorted(set(src)))
+
+
+class TestRenameTables(unittest.TestCase):
+    """rename-tables (spec R13) on small whole programs: what is renamed,
+    what keeps its name and why, each reason the pass turns off, the decode
+    map, and the same behaviour under real Lua 5.3. (tests/minify/fixtures.lua
+    holds the larger behaviour cases.)"""
+
+    @staticmethod
+    def fields(r):
+        return {old: new for new, old, kind, _ in r.renames if kind == "field"}
+
+    def test_renamed_and_kept(self):
+        src = ("local obj = {long_field_name = 1, insert = 2, n = 3, label_text = 'x'}\n"
+               "local mt = {__index = obj}\n"
+               "for _, s in ipairs({'label_text'}) do trace(obj[s], s) end\n"
+               "trace(obj.long_field_name, obj.insert, obj.n, math.floor(1.5),\n"
+               "      setmetatable({}, mt).long_field_name)\n")
+        r = M.minify_ex(src, "max")
+        ren = self.fields(r)
+        self.assertIn("long_field_name", ren)
+        for kept in ("insert", "n", "label_text", "floor", "__index"):
+            self.assertNotIn(kept, ren)
+        self.assertEqual(r.report.keys_kept["also a string literal"], ["label_text"])
+        self.assertTrue({"insert", "n", "floor", "__index"}
+                        <= set(r.report.keys_kept["library or metamethod"]))
+        self.assertIn("table keys renamed: 1", r.report.text())
+
+    def test_key_literals_become_fields(self):
+        r = M.minify_ex("local t = {['some_key'] = 1, other_key = 2}\n"
+                        "t['other_key'] = t['some_key'] + 1\ntrace(t.some_key, t.other_key)\n",
+                        "max")
+        self.assertNotIn("some_key", r.text)
+        self.assertNotIn("[", r.text)
+
+    def test_function_keys_renamed(self):
+        """Methods and functions stored in tables are renamed too (O1: the
+        smallest cart); the decode map has their names."""
+        r = M.minify_ex("local World = {}\nfunction World.update_world() return 1 end\n"
+                        "function World:draw_things() return 2 end\n"
+                        "trace(World.update_world(), World:draw_things())\n", "max")
+        ren = self.fields(r)
+        self.assertEqual(set(ren), {"update_world", "draw_things"})
+        self.assertNotIn("update_world", r.text)
+        lines = {old: line for new, old, kind, line in r.renames if kind == "field"}
+        self.assertEqual(lines, {"update_world": 2, "draw_things": 3})
+
+    def test_built_keys_keep_what_they_could_spell(self):
+        """A key built by string.format or `..` keeps every name it could
+        spell, and the new names avoid them; other keys are renamed. (The
+        event comes from a list: a constant would be folded into the key
+        literal "on_click", which is renamed with the key.)"""
+        src = ("local sprites = {sprite_01 = 1, sprite_02 = 2, on_click = 3, big_sprite = 4}\n"
+               "for i = 1, 2 do trace(sprites[string.format('sprite_%02d', i)]) end\n"
+               "for _, ev in ipairs({'click'}) do trace(sprites['on_' .. ev]) end\n"
+               "trace(sprites.big_sprite)\n")
+        r = M.minify_ex(src, "max")
+        self.assertIsNone(r.report.keys_off)
+        self.assertEqual(set(self.fields(r)), {"big_sprite"})
+        self.assertEqual(r.report.keys_kept["a key built from strings could spell it"],
+                         ["on_click", "sprite_01", "sprite_02"])
+
+    def test_off(self):
+        """Each reason the pass turns off (spec R13h), named in the report."""
+        cases = {
+            "fragment": ("local t = {a_key = 1}\ntrace(t.a_key)\n", "fragment mode"),
+            "dynamic": ("local t = {a_key = 1}\ntrace(_G.x, t.a_key)\n", "dynamic access"),
+            "built": ("local t = {speed = 1}\nlocal p = {'sp', 'eed'}\n"
+                      "trace(t[table.concat(p)])\n", "built at runtime"),
+            "shown": ("for k in pairs({abc_key = 1}) do trace(k) end\n", "passed to trace"),
+            "joined": ("for k in pairs({abc_key = 1}) do trace('k=' .. k) end\n",
+                       "joined into a string"),
+            "ordered": ("for k in pairs({abc_key = 1}) do trace(k < 'm') end\n",
+                        "compared by order"),
+            "sorted": ("local ks = {}\nfor k in pairs({abc_key = 1}) do ks[#ks + 1] = k end\n"
+                       "table.sort(ks)\ntrace(#ks)\n", "table.sort"),
+            "gsub": ("local v = {who_name = 'x'}\ntrace(('$who_name'):gsub('%$(%w+)', v))\n",
+                     "gsub"),
+            "nominify": ("local function f(t) -- NOMINIFY\n  return t.some_key\nend\n"
+                         "trace(f({some_key = 1}))\n", "NOMINIFY"),
+        }
+        for name, (src, why) in cases.items():
+            with self.subTest(case=name):
+                r = M.minify_ex(src, "max", whole_program=name != "fragment")
+                self.assertIn(why, r.report.keys_off or "")
+                self.assertEqual(self.fields(r), {})
+                self.assertIn("table keys: not renamed", r.report.text())
+
+    def test_new_names_never_collide(self):
+        """80 keys: the new names are distinct and never a key that keeps
+        its name (a string literal, a library key) or a name a built key
+        could spell."""
+        keys = [f"key_number_{i:03d}" for i in range(80)]
+        src = ("local t = {" + ", ".join(f"{k} = {i}" for i, k in enumerate(keys)) + "}\n"
+               "local u = {a = 1, b = 2, ab = 3, x = 4}\n"
+               "trace(u['a'], u.b, 'ab', u.x, math.pi, t[string.char(120)])\n"
+               "trace(" + ", ".join(f"t.{k}" for k in keys) + ")\n")
+        r = M.minify_ex(src, "max")
+        ren = self.fields(r)
+        self.assertEqual(set(ren), set(keys))
+        new = list(ren.values())
+        self.assertEqual(len(new), len(set(new)))
+        self.assertFalse(set(new) & (M.LIBRARY_KEYS | {"a", "b", "ab", "x"}))
+        self.assertTrue(all(len(n) > 1 for n in new))      # string.char(120): one character
+
+    def test_default_keeps_keys(self):
+        src = "local t = {long_field_name = 1}\ntrace(t.long_field_name)\n"
+        self.assertIn("long_field_name", M.minify(src, "default"))
+        self.assertNotIn("long_field_name", M.minify(src, "default,rename-tables"))
+        r = M.minify_ex(src, "default")
+        self.assertNotIn("table keys", r.report.text())
+
+    @NEEDS_LUA
+    def test_same_behaviour(self):
+        programs = [
+            "local A = {}\nA.__index = A\nfunction A.new(v) return setmetatable({value_slot = v}, A) end\n"
+            "function A:twice() return self.value_slot * 2 end\n"
+            "local B = setmetatable({}, {__index = A})\nB.__index = B\n"
+            "function B.new(v) local o = A.new(v) o.extra_slot = 1 return setmetatable(o, B) end\n"
+            "local b = B.new(4)\ntrace(b:twice(), b.extra_slot, b.value_slot)\n",
+            "local src, dst, n = {alpha_k = 1, beta_k = 2}, {}, 0\n"
+            "for k, v in pairs(src) do dst[k] = v n = n + v end\n"
+            "trace(dst.alpha_k, dst.beta_k, n, dst['beta_k'])\n",
+            "local h = {number = function(x) return x + 1 end, string = function(x) return #x end}\n"
+            "local t = {sprite_01 = 'a', sprite_02 = 'b', plain_key = 'c'}\n"
+            "trace(h[type(1)](1), h[type('ab')]('ab'), t[string.format('sprite_%02d', 2)],"
+            " t['sprite_0' .. 1], t.plain_key)\n",
+            "local list = {{rank_k = 2, name_k = 'b'}, {rank_k = 1, name_k = 'a'}}\n"
+            "table.sort(list, function(x, y) return x.rank_k < y.rank_k end)\n"
+            "local ok, v = pcall(function(o) return o.name_k end, list[1])\n"
+            "trace(list[1].name_k, list[2].name_k, ok, v)\n",
+        ]
+        def run(src):
+            rt = lua53.LuaRuntime(unpack_returned_tuples=True)
+            rt.execute("OUT = {} function trace(...) local p = table.pack(...) "
+                       "for i = 1, p.n do p[i] = tostring(p[i]) end "
+                       "OUT[#OUT + 1] = table.concat(p, ' ', 1, p.n) end")
+            rt.execute(src)
+            return list(rt.eval("OUT").values())
+        for src in programs:
+            with self.subTest(src=src[:40]):
+                r = M.minify_ex(src, "max")
+                self.assertTrue(self.fields(r), r.report.keys_off)
+                self.assertEqual(run(r.text), run(src))
 
 
 @NEEDS_LUA
@@ -1161,7 +1349,8 @@ class TestSavings(unittest.TestCase):
         for name, opts in combos():
             with self.subTest(sample=name, opts=label(opts)):
                 tot = self.measured(name, opts).savings.total()
-                for o in ("constants", "extra", "rename-vars", "rename-functions"):
+                for o in ("constants", "extra", "rename-vars", "rename-functions",
+                          "rename-tables"):
                     if o not in opts:
                         self.assertFalse(tot.get(o), o)
                 if not opts:
@@ -1200,6 +1389,14 @@ class TestSavings(unittest.TestCase):
             alone = self.measured("basic", M.parse_options(o)).savings.total()
             self.assertGreater(alone[o], 0, o)
 
+    def test_tables_share(self):
+        """basic has table keys to rename: rename-tables gets its own share,
+        alone and with every option."""
+        for opts in (M.ALL_OPTIONS, M.parse_options("rename-tables")):
+            with self.subTest(opts=label(opts)):
+                tot = self.measured("basic", opts).savings.total()
+                self.assertGreater(tot.get("rename-tables", 0), 0)
+
     def test_in_report(self):
         text = minified("markers", M.ALL_OPTIONS).report.text()
         self.assertNotIn("bytes saved by option", text)
@@ -1222,8 +1419,8 @@ class TestSavings(unittest.TestCase):
                                  .encode("utf-8")))
             table = report.savings_table(groups, options)
             self.assertRegex(table[1], r"^file +source +comments +whitespace +constants"
-                                       r" +extra +rename-vars +rename-functions +total"
-                                       r" +reduction$")
+                                       r" +extra +rename-vars +rename-functions"
+                                       r" +rename-tables +total +reduction$")
             self.assertRegex(table[-2], rf"^total +{raw:,} .* \d+%$")
             self.assertEqual(table[-1], "")         # a blank line ends it
             self.assertEqual([r.split()[0] for r in table[2:-1]],
@@ -1249,7 +1446,7 @@ class TestSavings(unittest.TestCase):
         self.assertTrue(table[3].endswith("(removed: unused)"))
         self.assertFalse(table[2].endswith("(removed: unused)"))
         self.assertRegex(table[3], r" 100%  \(removed: unused\)$")
-        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +0 +1,024 +67%$")
+        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +0 +0 +1,024 +67%$")
 
 
 class TestBundle(unittest.TestCase):
@@ -1291,6 +1488,7 @@ class TestBundle(unittest.TestCase):
                 self.assertEqual("rename-vars" in opts, "CONST_COLORS" not in code)
                 self.assertEqual("rename-vars" in opts, "renameme_ball" not in code)
                 self.assertEqual("rename-functions" in opts, "renamefn_land" not in code)
+                self.assertEqual("rename-tables" in opts, "renamekey_spin" not in code)
                 if "constants" in opts:
                     # inlined at its reads, and its declaration gone from the module
                     module = re.search(r'preload\["constants"\]=function\(\.\.\.\)(.*?)\bend\b',
@@ -1324,7 +1522,10 @@ class TestBundle(unittest.TestCase):
         same options; an older build's `rename` reads as rename-vars."""
         for opts, flag in ((frozenset(), ""), (M.DEFAULT_OPTIONS, "-m"),
                            (M.ALL_OPTIONS, "-m=max"),
-                           (M.parse_options("rename-functions"), "-m=comments,rename-functions")):
+                           (M.parse_options("rename-functions"), "-m=comments,rename-functions"),
+                           (M.parse_options("rename-tables"), "-m=comments,rename-tables"),
+                           (M.DEFAULT_OPTIONS | {"rename-tables"},
+                            "-m=comments,rename-vars,rename-tables,constants,whitespace,extra")):
             with self.subTest(flag=flag):
                 self.assertEqual(bundle.minify_flag(opts), flag)
                 self.assertEqual(bundle.flag_options(flag), opts)

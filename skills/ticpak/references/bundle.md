@@ -55,15 +55,19 @@ can't be a `.tic`.
    | *(none)* | the source inlined verbatim; fails if a module has a column-0 `-- <` comment |
    | `-m=comments` | comments removed, line structure kept: a readable cart and a safe default |
    | `-m=comments,whitespace` | lines packed to 120 columns |
-   | `-m` | the `default` preset, every option but `rename-functions` (`comments,rename-vars,constants,whitespace,extra`): small, and error messages still name functions |
-   | `-m=max` | every option, `rename-functions` too: the smallest cart, but error messages show short function names (decode them as below) |
+   | `-m` | the `default` preset, every option but `rename-functions` and `rename-tables` (`comments,rename-vars,constants,whitespace,extra`): small, and error messages still name functions, fields and methods |
+   | `-m=max` | every option, `rename-functions` and `rename-tables` too: the smallest cart, but error messages show short function, field and method names (decode them as below) |
 
-   On a 20-module game these gave 96K, 48K, 41K, 29K and 27K characters of
+   On a 20-module game these gave 96K, 48K, 41K, 29K and 24K characters of
    code. Go further than `comments` only if the user wants the code under the
    free editor's 64K, or as small as possible. Code past 64K is fine on Pro,
    and every player loads it. Choose `-m=max` only when `-m` isn't small
-   enough: it saves 2–12% more, most on code written as many global
-   functions.
+   enough: on eight games it saved another 2–20% (12% typical). `rename-functions` saves
+   most on code written as many global functions, and `rename-tables` on
+   code with many long field and method names. `rename-tables` renames keys
+   only where an analysis proves it safe: if the report's `table keys:` line
+   says `not renamed`, it names the reason and line (often a `pairs` loop
+   that prints or concatenates its keys). That is a size note, not an error.
 3. **Report the summary.** It is the last lines of the output (and of the
    report file, for a folder build or with `-r`):
 
@@ -95,8 +99,8 @@ can't be a `.tic`.
 
    Point to the biggest `total` files (bytes after minifying), and to any
    with a low `reduction`. What the code is made of follows (its `function
-   names rename-functions would shorten` line is what `-m=max` would save on
-   names), then the biggest names never renamed, such as globals, which you
+   names rename-functions would shorten` and `table field and method names`
+   lines are what `-m=max` works on), then the biggest names never renamed, such as globals, which you
    can shorten by hand. A negative entry is normal. An inlined constant's
    bytes move to the file that reads it, and the `(added by ticpak)` row
    holds the aliases and shared literals `extra` declares. `(removed: unused)` marks a module

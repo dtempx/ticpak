@@ -8,23 +8,18 @@ it.
 Where the implementation departs from the original draft, the requirement
 says so in an **As built** note, and §7 logs the decision.
 
-Field renaming (I1b, D13, D14, R13, drafted 2026-10-06) is a proposal: every
-part of it is marked **NOT IMPLEMENTED**, and nothing in the code cites it yet.
-
 ## 1. Purpose and scope
 
 Shrink the code of a packaged TIC-80 cart far beyond comment and whitespace
 removal. The passes are: inlining constants, folding constant expressions,
 removing dead code, tree shaking unreferenced definitions, and renaming
-variables, and on request functions. Behaviour must stay identical, and the
-result must stay debuggable: each function starts on its own line, and unless
-`rename-functions` is chosen (I1c), function names survive.
+variables, and on request functions and table keys. Behaviour must stay
+identical, and the result must stay debuggable: each function starts on its
+own line, and unless `rename-functions` or `rename-tables` is chosen (I1b,
+I1c), function, field and method names survive.
 
 **Out of scope:**
-- renaming table fields (`obj.x`, `M.update`, `{k=…}`, string keys), method
-  names, and the implicit `self`. **NOT IMPLEMENTED:** R13 proposes renaming
-  table keys when checks on the whole program pass. Until it is built,
-  table keys stay out of scope;
+- renaming the implicit `self`;
 - any transform that re-prints an expression from an AST.
 
 ## 2. Environment (verified facts)
@@ -55,25 +50,31 @@ result must stay debuggable: each function starts on its own line, and unless
 
 - **I1. Mode.** Max mode is this spec's whole-program pipeline: every option
   past `comments` runs it. Two presets name option sets (revised 2026-10-06):
-  - `default`: every option but `rename-functions`. It is `ticpak bundle
-    --minify`, `ticpak minify` with no option flags, and `mode="default"`.
+  - `default`: every option but the opt-in `rename-functions` and
+    `rename-tables`. It is `ticpak bundle --minify`, `ticpak minify` with no
+    option flags, and `mode="default"`.
   - `max`: every option. It is `ticpak bundle --minify=max`, `ticpak minify
     --max`, and `mode="max"` (the API's default).
 
-  A preset can be listed with options (`--minify=default,rename-functions` is
-  `max`). When max mode was added, the minifier's earlier `none` and `default`
+  A preset can be listed with options
+  (`--minify=default,rename-functions,rename-tables` is `max`). When max mode
+  was added, the minifier's earlier `none` and `default`
   modes kept their output byte for byte (checked against the pre-change
   baseline on wavynavy).
 - **I1a. Fragment mode** (added as built). `whole_program=False` minifies one
   module on its own: no pass touches globals. `ticpak minify` uses it for any
   file but a cart that requires no modules.
   beyondcastlewolfenstein's `check.py` uses it for per-module size estimates.
-- **I1b. The `fields` option. NOT IMPLEMENTED.** `--minify=fields`
-  (`ticpak bundle` and `ticpak minify`) turns on key renaming (R13). Like
-  every option, it implies `comments`. It is **opt-in**: a bare `--minify`
-  and the `max` preset leave it out until R13 passes acceptance (§6), and
-  O2 decides whether it joins them then. In fragment mode it does nothing
-  (R13a). Pass name for `passes=` (I2): `fields`.
+- **I1b. The `rename-tables` option (added 2026-10-06).**
+  `--minify=rename-tables` (`ticpak bundle`; `--rename-tables` for `ticpak
+  minify`) turns on table key renaming (R13). Like every option, it implies
+  `comments`. It is **opt-in**, like `rename-functions` (I1c): `default`
+  leaves it out and `max` includes it. Error messages and tracebacks then
+  show short field and method names, and its guarantee rests on an analysis
+  of how the program uses strings (R13h), not on Lua's semantics alone.
+  Leaving it out is the only opt-out: there is no per-key one (decision O3,
+  §7). In fragment mode it does nothing (R13a). Pass name for `passes=`
+  (I2): `rename-tables`.
 - **I1c. The rename options (added 2026-10-06).** `rename-vars` (named
   `rename` until 2026-10-06) renames variables (R8). `rename-functions`
   renames function bindings too (R8j). It is **opt-in**: `default` leaves it
@@ -81,8 +82,8 @@ result must stay debuggable: each function starts on its own line, and unless
   `max` includes it. Each implies `comments`. Pass names for `passes=` (I2):
   `rename-vars` and `rename-functions`.
 - **I2. Pass switches.** `passes=<list>` (API only) picks a subset of the
-  max-mode passes: `fold,inline,dce,shake,rename-vars,rename-functions,sugar,
-  alias,literals,merge`, defaulting to all. Layout (R3) and tidy (R11d) always run in max mode.
+  max-mode passes: `fold,inline,dce,shake,rename-vars,rename-functions,
+  rename-tables,sugar,alias,literals,merge`, defaulting to all. Layout (R3) and tidy (R11d) always run in max mode.
 - **I3. Width.** `width=N` (API only) sets the line width, default 120 (R3).
 - **I4. Python API.** `minify(src, mode, **opts)` and
   `minify_cart(text, mode, meta_keys, **opts)` keep their signatures.
@@ -244,92 +245,79 @@ result must stay debuggable: each function starts on its own line, and unless
   statement, or an assignment or `local` statement whose first right-hand-side
   expression is a function expression. The `package.preload["m"] =
   function(...)` lines are function-start statements.
-- **D13. Key name. NOT IMPLEMENTED.** An identifier written in the source as
-  a string table key, in a **key position**:
+- **D13. Key name (added 2026-10-06).** An identifier used as a string table
+  key, in a **key position**:
   - the name after `.` in an index (`t.k`) or after `:` in a method call
     (`t:k()`);
   - each name after the first in a `function` statement's path, and its
     method name (`function a.k:m()`: `k` and `m`);
   - a named field in a table constructor (`{k=…}`);
-  - a string literal whose value is an identifier but not a keyword, written
-    as an index key (`t["k"]`) or a bracketed constructor key
-    (`{["k"]=…}`). Such a literal is a **key literal**.
+  - a string literal that spells an identifier (not a keyword), written as
+    an index key (`t["k"]`) or a bracketed constructor key (`{["k"]=…}`).
+    Such a literal is a **key literal**. The module names of
+    `package.preload[…]` and `package.loaded[…]` are not: R7 and the module
+    timeline read them as literals.
 
-  Every other string literal is a **value literal**, including one whose
-  value is an identifier (`state = "dead"`, `t[k]` after `local k = "dead"`).
-  `rawget` and `rawset` would be key positions too, but any read of them
-  triggers D6 as built, which disables R13.
-- **D14. Key shape. NOT IMPLEMENTED.** A conservative description of the
-  identifier strings an expression can evaluate to **at runtime without being
-  written as a literal** (a synthesized string). It is a union of these
-  alternatives:
-  - **none:** the expression cannot produce an identifier string:
-    - a number literal, `nil`, `true` or `false`, a table constructor, a
-      function expression;
-    - an arithmetic, bitwise or comparison operator, `not`, or `#`;
-    - a concatenation with at least one literal piece that holds a character
-      that can't occur in an identifier (`a..","..b`, `"x="..n`);
-    - a value literal (R13c keeps its name, so it is never renamed);
-    - a key value (R13f), which is always a key name the program has
-      already renamed consistently.
-  - **a finite set** of strings:
-    - `type(…)`: `nil number string boolean table function thread
-      userdata`;
-    - `math.type(…)`: `integer float`;
-    - `coroutine.status(…)`: `suspended running normal dead`;
-    - `s:sub(i, i)` or `string.sub(s, i, i)` where `s` is a string literal:
-      each character of `s`.
-  - **contains P:** a concatenation one of whose literal pieces is P, made
-    only of identifier characters: every result contains P
-    (`l.."_s"..n`).
-  - **any:** every other synthesized string: other `string` library calls
-    and string methods (`format`, `rep`, `char`, `upper`, `gsub`, `sub` on a
-    non-literal, …), `tostring`, a concatenation with no literal piece, and
-    any other library or TIC-80 API call that returns a string.
+  Every other string literal is a **value literal**, including one that
+  spells an identifier (`state = "dead"`). `rawget` and `rawset` would be key
+  positions too, but reading them is dynamic access (D6), which turns R13
+  off.
+- **D14. Key flow (added 2026-10-06).** An analysis of the whole program
+  that works out what every variable, parameter, return value and table
+  slot can hold, as a set of alternatives:
+  - **strings:** a *literal* made of identifier characters, by its value
+    (`"dead"`); a string holding a character no identifier has (never a key
+    name, so harmless); a string *built at runtime*, described as closely as
+    the analysis can: one that fully matches a *pattern* (a regular
+    expression), one of at most *n characters*, or *any string*; and a *key
+    value*, a key the runtime hands back (the first variable of a
+    `pairs`/`next` loop, `next`'s result, the key argument of an
+    `__index`/`__newindex` function);
+  - **program functions**, by the expression that made each, and **program
+    tables**, by the constructor (or `table.pack` call) that made each;
+  - **library values** (`string.format`, `math`), and a function or table
+    the analysis does not track.
 
-  It is computed for the whole program at once, ignoring statement order,
-  and repeated until nothing changes. A function **escapes** when its value
-  is stored anywhere but its own binding: under a key, in another variable,
-  as an argument or as a return value. An implementation may swap any rule
-  below for a more precise one, provided the result still covers every
-  string the expression could produce:
-  - **A local or global:** the union of the shapes of every value written to
-    it.
-  - **A parameter:** the union of the argument in the same position (counting
-    `self` in a method call or definition) of every call that may reach the
-    function:
-    - calls whose callee resolves to the function's binding;
-    - if the function escapes, every call whose callee isn't resolved.
+  It ignores statement order and is solved to a fixpoint; every set only
+  ever grows. Values flow:
+  - **through variables and calls:** into a variable from every value
+    written to it; into a parameter from the argument in the same position
+    (counting `self`) of every call whose callee can hold that function, and
+    into `...` from the rest; out of a call from its callee's `return`
+    expressions;
+  - **through tables:** into a slot from every store, per table and per key
+    name (`t.k = v`, `{k = v}`, `t["k"] = v`), or into the table's
+    number-keyed or string-keyed slot when the key is computed (string-keyed
+    when the key can be a string); out of a read from the same slot, plus the
+    string-keyed slot (a computed string can name any key), plus what code
+    the analysis doesn't follow could have stored in an unknown table. A
+    read also follows the metatable's `__index` (a table, read again, or a
+    function, its return values), and a store its `__newindex`;
+    `setmetatable(t, mt)` records `mt` as `t`'s metatable;
+  - **through the library**, by what each function does: `type`,
+    `math.type` and `coroutine.status` return known literals; `tostring` its
+    argument's strings, or a number's text; `string.format` with a literal
+    format a pattern made from it (`"sprite_%02d"` gives `sprite_-?\d*`), and
+    `..` a pattern made from what each piece can be; `s:sub(i, i)` (or
+    `i + c`) a string of at most one (c + 1) characters, and of a literal its
+    pieces; `string.char(a, b)` two characters; every other string function
+    any string; `select`, `assert`, `setmetatable`, `pcall`,
+    `table.unpack`, `table.remove`, `next`, `pairs` and `ipairs` pass values
+    through; `table.insert`, `table.move`, `table.pack` and `table.sort`'s
+    comparator move them between slots; the TIC-80 API returns numbers. A
+    library function that calls back (`pcall`, `xpcall`, `table.sort`,
+    `string.gsub`, `coroutine.create`/`wrap`, or one the analysis doesn't
+    know) passes its callback what the library would: any value from a
+    coroutine or an unknown function;
+  - **into metamethods:** a function stored under a `__` key is called by
+    the runtime, `__index` and `__newindex` with a key value, the others
+    with any value (an operand may be a key). When a string literal starts
+    with `__`, a function stored under any computed string key counts too.
 
-    A parameter past the last argument is `nil`. `...` is the union over the
-    remaining positions. A function given directly as a `gsub` replacement
-    has parameters of shape **any**. A `table.sort` comparator's parameters
-    take the shape of a key read.
-  - **A call:**
-    - to a function the program defines, resolved: the union of its `return`
-      expressions;
-    - with a callee that isn't resolved: the union of the `return`
-      expressions of every escaping function;
-    - to a library function: its own shape (above). For the ones that hand
-      back what the program gave them (`select`, `table.unpack`,
-      `table.remove`, `pcall`, `xpcall`, `coroutine.*`), the union of their
-      arguments and of the `return` expressions of every function.
-  - **A generic `for` variable:**
-    - over `pairs` or `next`, the first is a key value and the second a key
-      read;
-    - over `ipairs`, the first is **none** and the second a key read;
-    - over `string.gmatch`/`:gmatch`, **any**;
-    - over any other iterator, as for a call whose callee isn't resolved.
-  - **A key read:**
-    - for `t.k` or a key literal: the union of the shapes of every value
-      stored under that key name, in an assignment or a constructor;
-    - for `t[e]` with any other key: the union over every key;
-    - either way, plus the `return` expressions of every function stored
-      under `__index`.
-
-  If the program defines an arithmetic or `__concat` metamethod (D13 key
-  name `__add` … `__concat` anywhere), then operators can return anything.
-  Arithmetic and `..` are then **any**.
+  *Any value* includes a key value only once a key has reached code the
+  analysis doesn't follow (a coroutine, a library function it doesn't know,
+  a function from the library, a table's `__call`); until then, a value
+  from there can't be a key.
 
 ## 5. Requirements
 
@@ -464,7 +452,8 @@ expression, or a read of an always-falsy binding (D9).
 function bindings).
 - **a. What is renamed:** locals (including parameters, `for` variables and
   labels) and non-reserved globals. Function bindings (D11, unless R8j),
-  reserved names (D4), fields and the implicit `self` are not renamed. Globals
+  reserved names (D4), fields (R13 renames those) and the implicit `self`
+  are not renamed. Globals
   are renamed only when no dynamic access (D6) is present.
 - **b. Name pool,** in order: all 1-character identifiers (`a`–`z`, `A`–`Z`,
   `_`), then 2-character ones, then 3-character ones, and so on. The pool
@@ -551,7 +540,8 @@ layout or anything else inside it. It comes out byte for byte.
   kept: a directive attached to a `function name` or `local function name`
   statement keeps `name` as R8g keeps a variable (pinned), so R8j leaves it
   alone (added 2026-10-06; `local name = function` was already kept by R8g).
-  A method or a function in a table (`function M.f`) keeps its name anyway.
+  A method or a function in a table (`function M.f`) keeps its name unless
+  `rename-tables` is on, which turns off when there is protected code (R13g).
   The comment carrying the directive is removed like any other comment unless
   it lies inside the protected text.
 - **g. Interface.** The protected text is opaque to every pass, so every name
@@ -627,7 +617,8 @@ layout or anything else inside it. It comes out byte for byte.
 - **a. What is renamed:** function bindings (D11) that R8a would rename if
   they were variables: locals, and non-reserved globals when no dynamic
   access (D6) is present, in whole-program mode only. Still never renamed:
-  functions stored in tables and methods (`function M.f`, `obj:m`: fields),
+  functions stored in tables and methods (`function M.f`, `obj:m`: fields,
+  which R13 renames),
   the TIC-80 callbacks and every other reserved name (D4), and a binding a
   NOMINIFY directive pins (R8g, R8h f, R8h g).
 - **b. One allocation.** Variables and functions are renamed by one pass,
@@ -658,10 +649,8 @@ edits on the original token stream, planned from the parse.
 **As built:** the passes edit the lossless tree described in R10b. Each pass
 works on a fresh parse and re-emits it. The fixpoint loop allows 20 rounds,
 and 2–3 is typical. The small passes (sugar, alias, literals, merge, tidy) run
-*before* renaming, so the locals they create get short names too.
-
-**NOT IMPLEMENTED:** key renaming (R13) would run between the fixpoint loop
-and the small passes (R13l).
+*before* renaming, so the locals they create get short names too. Table key
+renaming (R13) runs between the fixpoint loop and the small passes (R13l).
 
 **R10. Safety and verification.**
 - **a. Refuse rather than guess.** A parse error aborts with its line. A
@@ -719,6 +708,8 @@ and the small passes (R13l).
   - the UPPER_CASE names that failed D8, with the clause;
   - the zero-write globals;
   - any dynamic-access trigger and the passes it disabled;
+  - with `rename-tables`, the table keys renamed, or why the pass is off,
+    and the keys kept and why (R13m);
   - the names kept by a NOMINIFY directive (R8g), with the line of their
     declaring or assigning statement;
   - the functions and modules kept verbatim by a NOMINIFY directive (R8h),
@@ -731,7 +722,8 @@ and the small passes (R13l).
   first token. Together they translate a TIC-80 runtime error back to source.
   **As built:** each rename records its new name, old name, kind and source
   `file:line` (from `ticpak`'s origin map), but not its enclosing function.
-  The source line is enough to find it.
+  The source line is enough to find it. A table key renamed by R13 is kind
+  `field`, at its first occurrence; it has the same new name everywhere.
 - **h. Runtime:** standard library only for packaging, and under 5 s on
   wavynavy's ~150K-character bundle.
 
@@ -791,174 +783,147 @@ individually switchable:
 - The reserved-name list (D4.2) is generated by a small headless TIC-80 probe
   script, `scripts/update_reserved.py`.
 
-**R13. Key renaming (the `fields` option). NOT IMPLEMENTED.** Key names (D13)
-are shortened. Renaming goes **by spelling, not by table**: every occurrence
-of a key name, on whatever table, becomes the same new name. The pass never
-asks which tables the program defines. Consistent renaming preserves
-everything the program does with its own keys: keys copied between tables,
-`__index` chains, keys read back from `pairs` and used as keys again, and
-module tables passed around all still match. Two kinds of thing can still go
-wrong: a key that the platform reads or provides (b), and a string that is
-not written as a key literal but is used as a key or compared with one
-(c–g). Each of those is either kept by name or disables the pass. The pass
-is sound only when its checks pass. It is never a guess (R10a).
+**R13. Table key renaming (the `rename-tables` option, added 2026-10-06).**
+Key names (D13) are shortened. Renaming goes **by spelling, not by table**:
+every occurrence of a key name, on whatever table, becomes the same new name.
+The pass never has to decide which tables the program defines. Consistent
+renaming preserves everything the program does with its own keys: keys
+copied between tables, `__index` chains, keys read back from `pairs` and
+used as keys again, and module tables passed around all still match. Two
+kinds of thing can still go wrong: a key the platform reads or provides (b),
+and a string that isn't written as a key literal but meets a key, or a key
+that is looked at as a string (c–f). D14's analysis finds them. Each either
+keeps a name or turns the pass off (h). The pass is sound when its checks
+pass; it is never a guess (R10a).
 
-- **a. Scope. NOT IMPLEMENTED.** Whole-program mode only. In fragment mode
-  (I1a) a module's keys are its interface to code the minifier can't see, so
-  the pass does nothing.
-- **b. Platform keys, kept. NOT IMPLEMENTED.** Never renamed:
-  - every key of every table reachable from `_G` in the target TIC-80
-    (`math.floor`, `string.sub`, `table.insert`, `package.preload`, …).
-    `scripts/update_reserved.py` lists these from the binary, as D4.2 does
-    for globals, into a second generated block in `minify.py`;
+- **a. Scope.** Whole-program mode only. In fragment mode (I1a) a module's
+  keys are its interface to code the minifier can't see, so the pass does
+  nothing.
+- **b. Library keys, kept.** Never renamed:
+  - every key of every library table in the target TIC-80, two levels deep
+    (`string.sub`, `math.pi`, `package.preload`, `package.loaded.math`, the
+    string metatable's `__index`). `scripts/update_reserved.py` lists them
+    from the binary into the `TIC80_LIBRARY` block of `minify.py`, with the
+    globals (D4.2): 98 keys in 1.2.0 Pro;
+  - the members of the 5.3 libraries TIC-80 1.2 lacks (`utf8`, `os`, `io`,
+    and 5.2's `bit32`);
   - every name starting with `__` (metamethods, `__name`, `__mode`,
-    `__metatable`, and the program's own `__` names);
+    `__metatable`, and the program's own);
   - `n`, which `table.pack` writes.
 
-  The names of globals are not kept. Any `_G`/`_ENV` access triggers D6,
-  which disables the pass (h), so a key never names a global. The pass relies
-  on TIC-80 1.2's API neither taking nor returning tables with string keys.
-  The probe must confirm this when the pass is built and whenever TIC-80 is
-  upgraded.
-- **c. Names in literals, kept. NOT IMPLEMENTED.** A key name equal to the
-  value of any value literal (D13) is never renamed. This covers keys reached
-  through data (`local k = "speed"; t[k]`), and comparisons with key values
-  (`if k == "speed"`). Key literals are renamed with their key: the literal's
-  text changes (`t["speed"]` becomes `t["q"]`). Rewriting it to `t.q` or
-  `{q=…}` would save more and is a later step.
-- **d. Synthesized keys. NOT IMPLEMENTED.** For every index key expression
-  (`t[e]`, `{[e]=…}`), take its key shape (D14):
-  - **none:** nothing to do;
-  - **a finite set:** each string in the set is kept as a name (never
-    renamed) and excluded from the pool (j);
-  - **contains P:** every key name containing P is kept, and no new name
-    may contain P;
-  - **any:** the pass is disabled (h).
-- **e. `gsub` with a table. NOT IMPLEMENTED.** `string.gsub` or `:gsub`
-  looks up each captured string as a key of a replacement table. The pass is
-  disabled by a `gsub` call whose third argument (second for `:gsub`) might
-  be a table, or a function that isn't written in place. That argument is
-  allowed when it is:
-  - a string literal, a concatenation, or a call to `tostring` or a `string`
-    function;
-  - a function expression, whose parameters then have shape **any** (D14).
-- **f. Key values stay keys. NOT IMPLEMENTED.** These are **key values**,
-  strings the runtime hands back that are key names:
-  - the first variable of a generic `for` over `pairs(…)` or `next`;
-  - the first result of a `next(…)` call;
-  - the second parameter of a function stored under `__index` or
-    `__newindex`, whether in a constructor (`{__index=function(t,k) …}`)
-    or an assignment (`mt.__index = f`, with `f` resolved to a function
-    binding; an unresolved one disables the pass).
+  Global names are not kept: any `_G`/`_ENV` access is dynamic access (D6),
+  which turns the pass off. The TIC-80 1.2 API neither takes nor returns
+  tables with string keys: its functions take and return numbers, booleans
+  and nil, `print`, `trace`, `font` and `sfx` take strings, and `map`'s remap
+  callback gets numbers.
+- **c. Names in literals, kept.** A key name equal to a value literal (D13)
+  is never renamed. This covers keys reached through data (`local k =
+  "speed"; t[k]`) and comparisons with key values (`if k == "speed"`). Key
+  literals are renamed with their key and become fields: `t["speed"]`
+  becomes `t.q`, and `{["speed"]=1}` becomes `{q=1}`.
+- **d. Built keys.** At every computed key (`t[e]`, `{[e]=…}`), and at every
+  `==`/`~=` with a key value on one side, the strings the other side can be
+  (D14) decide:
+  - a literal, a string with a non-identifier character, or a key value:
+    nothing to do (c keeps the literal's name);
+  - a known literal from the library (`type(x)`): that name is kept;
+  - a pattern: every key name it fully matches is kept, and no new name may
+    match it;
+  - at most n characters: every key name that short is kept, and new names
+    are longer;
+  - any string: the pass turns off.
+- **e. `gsub` with a table.** `string.gsub` looks up each captured string as
+  a key of a replacement table. The pass turns off for a `gsub` whose
+  replacement might be a table: anything but a string literal, a function
+  expression, a concatenation, or a call that can only be `tostring` or a
+  `string` function.
+- **f. Key values stay keys.** A key value (D14) may be used as a key,
+  compared with `==`/`~=`, tested for truth, stored, returned, and passed to
+  the program's own functions or through `select`, `pcall` and the like:
+  the analysis follows it. The pass turns off when one reaches a place where
+  its spelling would show:
+  - a concatenation, `#`, or an order comparison (`<`, `<=`, `>`, `>=`);
+  - a `string` function or method, `string.format`, `error`, `print`,
+    `trace`, `font`, `sfx`, or a library function the analysis doesn't know;
+  - a list given to `table.concat`, or to `table.sort` without a comparator.
 
-  A variable holding a key value may only be:
-  - used as an index key;
-  - an operand of `==` or `~=`;
-  - copied into a local that obeys the same rules.
+  `tostring(k)` is `k` again, so it turns the pass off only where `k` would.
+- **g. Protected code.** Code kept verbatim by NOMINIFY (R8h) is opaque, so
+  it could use any key in any way: the pass turns off when the program has
+  any. Comments a directive keeps (R8i) are not code and don't count.
+- **h. Turning off.** The whole pass is off, and the report names the reason
+  with its `file:line`, when:
+  - the program is a fragment (a);
+  - there is dynamic access (D6);
+  - a computed key can be any string (d);
+  - a `gsub` replacement might be a table (e);
+  - a key value's spelling would show (f);
+  - there is protected code (g);
+  - the analysis doesn't settle in 200 rounds.
 
-  Any other use disables the pass, because the renamed key could become
-  visible. Examples: `print(k)`, `k..":"`, `k:sub(1,1)`, passing `k` to a
-  function, storing `k` as a value.
-- **g. Protected code. NOT IMPLEMENTED.** Text kept verbatim by NOMINIFY
-  (R8h) is opaque. Every identifier in it, and every identifier-valued string
-  literal in it, is kept as a key name.
-- **h. Disabling. NOT IMPLEMENTED.** The whole pass is off, and the report
-  names the first trigger with its `file:line`, when:
-  - dynamic access (D6) is present;
-  - a key shape is **any** (d);
-  - a `gsub` replacement could be a table (e);
-  - a key value is used as anything but a key (f).
-
-  The other passes run as usual. Dropping only the affected names is not
-  possible for these triggers, because the pass can't tell which key names
-  they reach.
-- **i. Function-valued keys. NOT IMPLEMENTED.** A key name is
-  function-valued when any of its occurrences stores a function definition:
-  - the last path name or method name of a `function` statement;
-  - a constructor field `k=function…`;
-  - an assignment `t.k = function…` or `t["k"] = function…`.
-
-  As D11 does for function bindings, these keep their names, so tracebacks
-  (`in method 'update'`, `in function 'M.update'`) still read as the source
-  wrote them. Open as O1.
-- **j. Name pool. NOT IMPLEMENTED.** Keys have their own namespace,
-  separate from variables (R8). The new names follow R8b's order (1
-  character, then 2, …) and exclude:
-  - keywords;
-  - every key name that stays (b, c, d, g, i, k);
-  - every identifier-valued string literal in the program;
-  - every string in a finite key shape, and every name containing a P from
-    a contains-P key shape (d);
-  - anything starting with `_`.
+  The other passes run as usual. Keeping only some names is not possible
+  for these triggers, since each could reach any key.
+- **i. Function-valued keys.** Methods and functions stored in tables
+  (`function M.update`, `obj:draw`, `{tick = function…}`) are renamed like
+  any other key (decision O1, §7: the smallest cart). Tracebacks then show
+  their short names, which the maps (m) decode.
+- **j. Name pool.** Keys have their own namespace, separate from variables
+  (R8). New names follow R8b's order (1 character, then 2, …) and exclude:
+  - keywords, and anything starting with `_`;
+  - every key that keeps its name (b–d), every library key, and every value
+    literal;
+  - every name a built key could spell (d).
 
   Key names are sorted by occurrence count (most first, ties by first
-  occurrence) and given pool names in that order. A name is renamed only
-  when its new name is shorter.
-- **k. NOMINIFY for keys. NOT IMPLEMENTED.** A NOMINIFY comment with
-  `keys:` followed by names (separated by spaces or commas) keeps those key
-  names everywhere in the program. It keeps nothing else, and is removed like
-  any other comment. A NOMINIFY attached to `t.x = …` still keeps nothing by
-  R8g, so R8i c keeps its comment, as today. Open as O3.
-- **l. Pass order. NOT IMPLEMENTED.** After the R9 fixpoint, so dead code
-  and the literals it held are gone, and before `sugar`, `alias`, `literals`
-  and `merge` (R11). `literals` would otherwise move key literals into
-  locals and hide them. `alias` only touches library keys, which (b) keeps.
-- **m. Report and maps. NOT IMPLEMENTED.** The report (R10f) gains:
-  - the number of keys renamed and the characters saved;
-  - the keys that stayed, by reason (b, c, d, g, i, k);
-  - the trigger that disabled the pass, if any.
-
-  The maps (R10g) record each key rename as kind `field`, with the new name,
-  the old name and the `file:line` of its first occurrence. A runtime error
-  such as `attempt to index a nil value (field 'q')` can then be translated
-  back to the source.
-- **n. Visible differences. NOT IMPLEMENTED.** These remain when every check
-  passes, and are accepted:
+  occurrence) and take pool names in that order. A key whose pool name would
+  not be shorter keeps its own name, and that name leaves the pool; this
+  repeats until it settles.
+- **k. No per-key opt-out** (decision O3, §7). To keep every key, leave
+  `rename-tables` off. NOMINIFY keeps variables, functions and comments
+  (R8g–i), not keys.
+- **l. Pass order.** After the R9 fixpoint, so dead code and the literals it
+  held are gone, and before `sugar`, `alias`, `literals` and `merge` (R11).
+  `literals` would otherwise move key literals into locals and hide them,
+  and folding has already turned `"on_" .. "click"` into the key literal
+  `"on_click"`, which is renamed with its key. `alias` only touches library
+  keys, which b keeps.
+- **m. Report and maps.** The report (R10f) says how many keys were
+  renamed, or why the pass is off, and lists the keys kept because they are
+  also a string literal or because a built key could spell them. The maps
+  (R10g) record each key rename as kind `field`, with the new name, the old
+  name and the `file:line` of its first occurrence, so `attempt to index a
+  nil value (field 'q')` decodes there. In the bytes saved by option
+  (R10f), `rename-tables` gets the difference the pass made.
+- **n. Visible differences.** These remain when every check passes, and are
+  accepted:
   - error messages and tracebacks show the new key names (decoded by m);
-  - `pairs` order may change, because the new keys hash differently. Lua 5.3
-    seeds its string hash per run, so a program that depends on `pairs`
-    order is already non-deterministic. Renaming adds no new hazard.
-- **o. Expected gain (estimate, 2026-10-06).** Measured on the 8 ports'
-  `max` output. The estimate applies (b), (c) and (j) and assigns short
-  names by frequency. It does not model (d) or (h), so a port that (h)
-  would disable still counts in full. It took the library key list from
-  desktop Lua 5.3, not TIC-80. "Kept by i" is the saving when
-  function-valued keys keep their names:
+  - `pairs` may visit keys in another order, because the new keys hash
+    differently. Lua 5.3 seeds its string hash per run, so a program that
+    depends on `pairs` order is already non-deterministic.
+- **o. Measured (2026-10-06)** on the 8 ports, code characters of `max`
+  without and with `rename-tables`:
 
-  | Port | Code after `max` | Key-name share | Saved, all keys | Saved, kept by i |
+  | Port | Without | With | Saved | Keys renamed |
   |---|---|---|---|---|
-  | dinoeggs | 69,370 | 21.7% | 9,325 (13.4%) | 8,025 (11.6%) |
-  | beyondcastlewolfenstein | 45,480 | 16.9% | 5,112 (11.2%) | 3,447 (7.6%) |
-  | loderunner | 28,859 | 15.3% | 3,039 (10.5%) | 1,700 (5.9%) |
-  | castlewolfenstein | 49,136 | 13.3% | 4,185 (8.5%) | 2,468 (5.0%) |
-  | serpentine | 51,899 | 12.5% | 4,295 (8.3%) | 4,257 (8.2%) |
-  | zaxxon | 36,306 | 12.3% | 2,690 (7.4%) | 1,942 (5.3%) |
-  | impossible-mission | 33,514 | 8.6% | 1,670 (5.0%) | 1,298 (3.9%) |
-  | wavynavy | 44,912 | 4.6% | 930 (2.1%) | 783 (1.7%) |
-  | **total** | 359,476 | | **31,246 (8.7%)** | **23,920 (6.7%)** |
+  | beyondcastlewolfenstein | 44,741 | 39,641 | 11.4% | 193 |
+  | loderunner | 27,346 | 24,324 | 11.1% | 120 |
+  | serpentine | 45,896 | 41,556 | 9.5% | 123 |
+  | dinoeggs | 67,649 | 61,901 | 8.5% | 186 |
+  | castlewolfenstein | 47,849 | 44,368 | 7.3% | 153 |
+  | impossible-mission | 30,843 | 29,152 | 5.5% | 83 |
+  | wavynavy | 46,015 | 44,945 | 2.3% | 70 |
+  | zaxxon | 35,746 | 35,746 | off: D6 | 0 |
+  | **total** | 346,085 | 321,633 | **7.1%** | |
 
-  The hazards occur at only a few sites:
-  - 13 `pairs` loops, none of which uses a key value as a string;
-  - 7 index keys built from strings, in 3 ports:
-    - castlewolfenstein's base64 table (`f[alphabet:sub(i,i)]`), a finite
-      set;
-    - dinoeggs' `aG[l.."_s"..tostring(x)]`, which contains `_s`;
-    - dinoeggs' `af[s:sub(l,l)]` with `s` a variable. Through D14's analysis
-      of where values come from, this may still be shown safe; otherwise it
-      disables the pass for dinoeggs;
-    - serpentine's `e[a..","..b]`, which has shape none.
-  - Two dinoeggs `gsub` calls whose replacement is `tostring(…)`, allowed by
-    (e).
-- **Open decisions.**
-  - **O1.** Should function-valued keys keep their names (i, as drafted, for
-    D11's readable tracebacks) or be renamed and decoded through the maps
-    (about 2 more points of saving overall)?
-  - **O2.** Should `fields` join a bare `--minify` and `max` once accepted, or
-    stay opt-in? It is the only pass whose soundness depends on checks about
-    how the program uses strings, rather than on Lua's semantics alone.
-  - **O3.** Is the `keys:` form (k) the right escape hatch, or should a
-    NOMINIFY attached to a table constructor or to `t.k = …` keep the keys
-    it writes? The latter changes what R8i c keeps today.
+  zaxxon's non-literal `require` is dynamic access. dinoeggs builds the
+  names of its graphics (`string.format("v%02x%02x_%s", …)`,
+  `name .. "_s" .. set`) and keeps the 266 keys those patterns match. The
+  pass adds up to 0.3 s per port. `difftest` (R10d): 8/8 ports identical
+  over 3,600 frames, seeds 1–3.
+- **As built:** `pass_keys()` in `minify.py`, on `_KeyFlow` (D14). Key
+  literals become fields by changing the `Index` node into a `Field` (and the
+  constructor field into a named one), so the lossless reparse (R10b) still
+  checks the output.
 
 ## 6. Implementation phases and acceptance
 
@@ -982,32 +947,35 @@ zaxxon 65,481 → 36,636. Minification takes 0.3–0.8 s per port.
 Tests live in `tests/minify/`: `run.py` (fold, bytecode, fixtures),
 `fixtures.lua`, and `difftest.py`.
 
-**Phase 6, key renaming (R13). NOT IMPLEMENTED.** Accepted when all of these
-hold:
-- **Fixtures.** `fixtures.lua` has a case for each rule, each run with the
-  pass on and its output compared:
-  - kept names: platform keys (R13b), names in literals (R13c), protected
-    code (R13g);
-  - each key shape (D14), including a flow through a local, a parameter, a
-    return value and a stored value;
-  - `gsub` with a table (R13e);
-  - each kind of key value use (R13f);
-  - each trigger that disables the pass (R13h), with the report line.
-- **Behaviour tests.** `tests/options` gains marker names (`renamefield_*`
-  must be renamed, `keepfield_*` must not be) and `fields` in its option
-  combinations.
-- **`difftest`.** Its order-stable `pairs` stub sorts keys by name, and
-  renaming changes that order. For the minified run, the stub must sort by
-  each key's original name, read from the R13m map. Then all 8 ports must
-  be identical over 3,600 frames, seeds 1–3, with `fields` on.
-- **Runtime key check** (test only). `difftest` gains a mode that runs the
-  original bundle with every non-literal index key (`t[e]`, `{[e]=…}`)
-  wrapped, so that each string used as a key at runtime is recorded. It fails
-  if a recorded string is a renamed key's old name or any new name. This
-  covers only the code the run reaches, so it backs R13d up rather than
-  proving it.
-- **Gain.** On the ports that the pass does not disable, the saving is close
-  to the R13o estimate.
+**Phase 6, table key renaming (R13).** Delivered 2026-10-06:
+- **Fixtures.** `fixtures.lua` has 20 "table keys" cases, all identical to
+  the original under `max`. Nine must rename keys: fields, methods, key
+  literals and function paths; a key also written as a string; keys copied
+  through `pairs`; `type()` dispatch and keys built by `string.format` and
+  `..`; a literal's characters; `__index`/`__newindex` and inheritance; the
+  library's own tables; callbacks, `pcall` and coroutines carrying tables;
+  handlers found by a built name. Eleven must turn the pass off, each for its
+  reason: a key printed, handed to a helper that prints it, stored and
+  printed later, returned and concatenated, sorted, ordered by `<`, seen by
+  an `__index` function, yielded from a coroutine, measured with `#`; a
+  `gsub` table; a key built from data. `run.py fixtures` fails a "table
+  keys" case whose pass is not on (and renaming) or, for a case named
+  "(pass off)", not off.
+- **Behaviour tests.** `tests/options` has the `renamekey_*` (renamed) and
+  `keepkey_*` (also a string, kept) markers and `rename-tables` in its 65
+  option sets, every one run under Lua 5.3 against the original.
+  `TestRenameTables` checks what is renamed and kept, each reason the pass
+  turns off, the decode map, pool collisions, and behaviour.
+- **`difftest`.** Its order-stable `pairs` stub sorts the minified run's
+  keys by their original names (from the R13m map). 8/8 ports identical over
+  3,600 frames, seeds 1–3.
+- **Boot.** `TICPAK_BOOT=1`: the test project's bundle under all 65 option
+  sets, and under `max` with every asset layout, boots in TIC-80 1.2.0 Pro
+  and passes `ticpak check`.
+- **Not built:** the runtime key check drafted here. The "(pass off)"
+  fixtures, which an unsound analysis would fail, and `difftest` cover what
+  it would have caught.
+- **Gain:** 7.1% on the ports (R13o), against an estimate of 6.7–8.7%.
 
 ## 7. Decision log
 
@@ -1076,22 +1044,6 @@ hold:
   its body. `alias`'s traversal became the shared `slot_walk` (port output
   without `literals` byte-identical), and its revert now keeps call sugar's
   edits, which it used to drop.
-- **2026-10-06:** key renaming drafted as I1b, D13, D14 and R13, at the
-  owner's request. It is **NOT IMPLEMENTED**, and table keys stay out of
-  scope (§1) until it is.
-  - **Approach.** Keys are renamed by spelling, the way Closure Compiler
-    renames properties. Working out which tables the program defines was
-    rejected: tables flow through parameters, globals, closures and
-    metatables, so tracking them would cost a lot and still lump most tables
-    together. Renaming by spelling needs only the list of names the platform
-    can see, and on TIC-80 that list is short.
-  - **Why it is opt-in (I1b).** Every earlier pass is sound by Lua's
-    semantics. This one is sound only when its checks on the whole program
-    pass (R13h).
-  - **What it would save.** Measured first: key names are 4.6–21.7% of the
-    ports' `max` output, and renaming them would save an estimated 6.7–8.7%
-    overall (R13o). That is the largest saving still available. `literals`
-    saved 1.0%.
 - **2026-10-06:** function renaming added as an opt-in option,
   `rename-functions` (I1c, R8j), at the owner's request; D11 now keeps
   function names only without it. `rename` became `rename-vars`. The presets
@@ -1103,3 +1055,43 @@ hold:
   statement now keeps its name as well as its body (R8h f). Output without
   `rename-functions` is unchanged: the port sizes under `default` match the
   previous `max` exactly.
+- **2026-10-06:** table key renaming, `rename-tables` (I1b, D13, D14, R13),
+  drafted and then built at the owner's request.
+  - **Approach.** Keys are renamed by spelling, the way Closure Compiler
+    renames properties. Working out which tables the program defines, to
+    rename only their keys, was rejected: renaming by spelling needs only the
+    list of names the platform can see, and on TIC-80 that list is short.
+  - **Measured first:** key names were 4.6–21.7% of the ports' `max` output,
+    the largest saving left (`literals` had saved 1.0%).
+  - **O1, function-valued keys:** renamed, for the smallest cart (the
+    owner's principle). Tracebacks show short method names; the maps decode
+    them.
+  - **O2, opt-in:** `rename-tables` is in `max`, not in `default`, like
+    `rename-functions`: its soundness rests on an analysis, not on Lua's
+    semantics alone.
+  - **O3, no per-key opt-out:** leaving the option off is the opt-out. The
+    drafted `-- NOMINIFY keys:` form was dropped.
+  - **Changed from the draft while building it:**
+    - tables are told apart by constructor, with metatables followed. With
+      every table merged into one, a single array of built strings (a
+      loderunner sound table) made every `ipairs` value "any string", and
+      the pass was off on 5 of the 7 ports it now runs on;
+    - "contains P" became a pattern (a regular expression): dinoeggs looks
+      up graphics by `string.format("v%02x%02x_%s", …)`, and the pattern
+      keeps exactly the keys it can spell;
+    - string literals carry their value, so `beam .. d` with `d` from a
+      literal list gives a pattern rather than any string;
+    - a key value is a value the analysis follows, not a variable checked
+      where it is used: storing or passing a key is fine, showing it is not
+      (R13f);
+    - "any value" includes a key only once a key has escaped (D14);
+      otherwise every coroutine or `pcall(require, …)` result looked like a
+      key;
+    - code kept by NOMINIFY turns the pass off (R13g), rather than keeping
+      the words it uses: it could build a key any way.
+  - **One bug found while measuring:** a concatenation whose pieces knew
+    nothing yet (the first rounds of the fixpoint) gave "any string", which
+    then never went away. A piece that is not a string is now a number's
+    text.
+  - **Result:** 7.1% off the ports' `max` output (R13o); `difftest` 8/8
+    identical.

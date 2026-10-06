@@ -13,14 +13,17 @@ a set - `comments,rename-vars`; an empty set is a passthrough:
   rename-vars       rename non-function variables to the shortest free names
   rename-functions  rename functions too (error messages then show the short
                     names; the decode map has the originals)
+  rename-tables     rename table keys (fields and methods) consistently across
+                    the program, when an analysis of how it uses strings proves
+                    that safe; off otherwise (the report says why)
   constants         inline constant values and remove the constants
   extra             the remaining optimisations: evaluate constant expressions,
                     remove unreachable code and anything nothing uses, call
                     sugar, alias heavily used API functions, share repeated
                     strings and numbers through locals, merge local statements
-Two presets: `default`, every option but rename-functions, and `max`, every
-option. Every option but `comments` works on the token stream, so it removes
-comments too.
+Two presets: `default`, every option but rename-functions and rename-tables,
+and `max`, every option. Every option but `comments` works on the token stream,
+so it removes comments too.
 
 Why no AST printer: luamin 1.0.4 (npm) re-prints expressions with Lua 5.1
 precedence and silently turned (x & y) + z into x&y+z (verified 2026-09-13 on
@@ -34,12 +37,15 @@ identifiers, so no expression is ever regrouped. The final text is re-lexed and 
 import bisect, math, re
 from decimal import Decimal
 
-OPTIONS = ("comments", "rename-vars", "rename-functions", "constants", "whitespace", "extra")
+OPTIONS = ("comments", "rename-vars", "rename-functions", "rename-tables", "constants",
+           "whitespace", "extra")
 OPTION_HELP = {
     "comments": "remove comments (keeps the metadata header and asset blocks)",
     "rename-vars": "rename variables to the shortest free names (1-2 letters)",
     "rename-functions": "rename functions to the shortest free names too"
                         " (error messages then show the short names)",
+    "rename-tables": "rename table fields and methods too, where an analysis proves"
+                     " it safe (error messages then show the short names)",
     "constants": "inline constant values and remove the constants",
     "whitespace": "remove extraneous newlines and whitespace",
     "extra": "further optimisations (see --help for more info)",
@@ -56,11 +62,14 @@ EXTRA_HELP = {
 }
 # The passes of the max pipeline (ALL_PASSES) each option runs.
 OPTION_PASSES = {"constants": ("inline",), "rename-vars": ("rename-vars",),
-                 "rename-functions": ("rename-functions",), "extra": tuple(EXTRA_HELP)}
+                 "rename-functions": ("rename-functions",),
+                 "rename-tables": ("rename-tables",), "extra": tuple(EXTRA_HELP)}
 ALL_OPTIONS = frozenset(OPTIONS)
-# `default`: every option but rename-functions, which costs readable error
-# messages (spec D11). `max`: every option.
-DEFAULT_OPTIONS = ALL_OPTIONS - {"rename-functions"}
+# `default`: every option but the opt-in ones: rename-functions costs readable
+# error messages (spec D11), and rename-tables both those and a guarantee that
+# rests on an analysis rather than Lua's semantics alone (spec R13). `max`:
+# every option.
+DEFAULT_OPTIONS = ALL_OPTIONS - {"rename-functions", "rename-tables"}
 PRESETS = {"default": DEFAULT_OPTIONS, "max": ALL_OPTIONS}
 
 
@@ -109,6 +118,25 @@ poke poke1 poke2 poke4 print rawequal rawget rawlen rawset rect rectb require re
 setmetatable sfx spr string sync table textri time tonumber tostring trace tri trib tstamp ttri type
 vbank xpcall
 """.split()
+# every key of the library tables, two levels deep (<string>: the
+# string metatable)
+TIC80_LIBRARY = """
+<string>.__index coroutine.create coroutine.isyieldable coroutine.resume coroutine.running
+coroutine.status coroutine.wrap coroutine.yield debug.debug debug.gethook debug.getinfo
+debug.getlocal debug.getmetatable debug.getregistry debug.getupvalue debug.getuservalue
+debug.sethook debug.setlocal debug.setmetatable debug.setupvalue debug.setuservalue debug.traceback
+debug.upvalueid debug.upvaluejoin math.abs math.acos math.asin math.atan math.atan2 math.ceil
+math.cos math.cosh math.deg math.exp math.floor math.fmod math.frexp math.huge math.ldexp math.log
+math.log10 math.max math.maxinteger math.min math.mininteger math.modf math.pi math.pow math.rad
+math.random math.randomseed math.sin math.sinh math.sqrt math.tan math.tanh math.tointeger math.type
+math.ult package.config package.cpath package.loaded package.loaded._G package.loaded.coroutine
+package.loaded.debug package.loaded.math package.loaded.package package.loaded.string
+package.loaded.table package.loadlib package.path package.preload package.searchers
+package.searchpath string.byte string.char string.dump string.find string.format string.gmatch
+string.gsub string.len string.lower string.match string.pack string.packsize string.rep
+string.reverse string.sub string.unpack string.upper table.concat table.insert table.move table.pack
+table.remove table.sort table.unpack
+""".split()
 # </reserved>
 
 CALLBACKS = {"TIC", "BOOT", "SCN", "BDR", "OVR", "MENU"}
@@ -121,8 +149,8 @@ RESERVED = set(TIC80_GLOBALS) | CALLBACKS | EXTRA_RESERVED
 DYNAMIC_NAMES = {"_G", "_ENV", "load", "loadstring", "dofile", "loadfile", "debug",
                  "rawget", "rawset", "rawequal", "getfenv", "setfenv"}
 NAME_EST = 2          # assumed length of a renamed identifier in size decisions
-ALL_PASSES = ("fold", "inline", "dce", "shake", "rename-vars", "rename-functions", "sugar",
-              "alias", "literals", "merge")
+ALL_PASSES = ("fold", "inline", "dce", "shake", "rename-vars", "rename-functions",
+              "rename-tables", "sugar", "alias", "literals", "merge")
 UPPER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -2889,6 +2917,1052 @@ def _take(it, n):
 
 
 # =============================================================================
+# Pass: table key renaming (spec R13, D13, D14)
+# =============================================================================
+#
+# Keys are renamed by spelling, not by table: every `.speed`, `:speed()`,
+# `{speed=}` and `["speed"]` becomes the same short name, so whatever the
+# program does with its own keys still lines up. What can break that is a
+# string the platform reads or hands back as a key (library members,
+# metamethods: kept by name), and a string built at runtime that meets a key
+# (`t["sp".."eed"]`) or a key that is looked at as a string (`print(k)` in a
+# pairs loop). _KeyFlow works out, for the whole program, which strings can
+# reach each key position and where the runtime's keys go; anything it can't
+# prove harmless keeps its name or turns the pass off.
+
+# The 5.3 library members TIC-80 1.2 lacks (utf8, os, io; bit32 from 5.2),
+# kept all the same so a cart written for another build never loses one.
+EXTRA_LIBRARY_KEYS = set("""char charpattern codepoint codes len offset clock date difftime
+execute exit getenv remove rename setlocale time tmpname close flush input lines open output
+popen read stderr stdin stdout tmpfile type write arshift band bnot bor btest bxor extract
+lrotate lshift replace rrotate rshift""".split())
+# spec R13b: never renamed. `n` is table.pack's; names starting `__` too.
+LIBRARY_KEYS = ({q.rsplit(".", 1)[1] for q in TIC80_LIBRARY} | EXTRA_LIBRARY_KEYS | {"n"})
+STRING_LIB = {q.split(".", 1)[1] for q in TIC80_LIBRARY if q.startswith("string.")}
+# the library tables: `string.format` is a library function, `M.format` not
+LIB_TABLES = {q.split(".", 1)[0] for q in TIC80_LIBRARY if not q.startswith("<")} \
+    | {"utf8", "os", "io", "bit32"}
+# The TIC-80 API: every function takes and returns numbers, booleans or nil,
+# except that these show (or play) a string argument.
+LUA_GLOBALS = set("""_G _VERSION assert collectgarbage coroutine debug dofile error
+getmetatable ipairs load loadfile math next package pairs pcall rawequal rawget rawlen rawset
+require select setmetatable string table tonumber tostring type xpcall""".split())
+TIC80_API = set(TIC80_GLOBALS) - LUA_GLOBALS - CALLBACKS
+TIC80_SHOWS = {"print", "trace", "font", "sfx"}
+# Library functions that never look at a string argument's spelling (they pass
+# it on, store it, or would fail the same on any identifier). Any other
+# library function is a sink: a key reaching it disables the pass (R13f).
+KEY_BLIND = (TIC80_API - TIC80_SHOWS) | {
+    "type", "select", "pcall", "xpcall", "setmetatable", "getmetatable", "next", "pairs",
+    "ipairs", "<ipairs>", "rawequal", "tostring", "tonumber", "require", "collectgarbage",
+    "table.insert", "table.remove", "table.unpack", "table.pack", "table.move",
+    "coroutine.create", "coroutine.wrap", "coroutine.resume", "coroutine.yield",
+    "coroutine.running", "coroutine.status", "coroutine.isyieldable"}
+LIT_RESULTS = {"type": ("nil", "number", "string", "boolean", "table", "function", "thread",
+                        "userdata"),
+               "math.type": ("integer", "float"),
+               "coroutine.status": ("suspended", "running", "normal", "dead")}
+# metamethods the runtime calls with operands, and what reads their result
+ARITH_MM = {"__add", "__sub", "__mul", "__div", "__mod", "__pow", "__unm", "__idiv", "__band",
+            "__bor", "__bxor", "__shl", "__shr", "__bnot", "__concat", "__len"}
+NOT_CALLED_MM = {"__index", "__newindex", "__mode", "__name", "__metatable"}
+
+# The analysis' values (spec D14): a shape is a set of these alternatives,
+# and ("lit", s) the string s (made of identifier characters; a literal, or
+# built), ("re", r) a string built at runtime that fully matches the regular
+# expression r, ("len", n) one of at most n characters; ("fn", id) a program
+# function, ("tbl", id) a program table (by the constructor that made it);
+# ("lib", name) a library value (`string.format`).
+ANY = ("any",)          # any string the program builds at runtime
+NONID = ("nonid",)      # a string holding a character no identifier has: never a key name
+KEY = ("key",)          # a key the runtime hands back (pairs, next, __index's argument)
+FNQ = ("fn?",)          # a function the analysis does not track (from the library)
+TBLQ = ("tbl?",)        # a table the analysis does not track: any table at all
+TOP = frozenset({ANY, KEY, FNQ, TBLQ})
+EMPTY = frozenset()
+STRINGISH = {"any", "lit", "re", "len", "nonid", "key"}
+IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+IDCHARS = re.compile(r"[A-Za-z0-9_]*\Z")
+# what tostring makes of anything but a string: a number, nil, a boolean, or
+# "table: 0x..." (only "inf" and "nan" could ever be key names)
+NUMBER_RX = r"-?(?:\d[\w.+-]*|inf|nan)"
+NUMBER_TEXT = ("re", NUMBER_RX + r"|nil|true|false|\w+: .*")
+# string.format's conversions, and what each can write
+FORMAT_SPEC = re.compile(r"%([-+ #0]*)\d*(?:\.\d*)?([diouxXeEfgGaAcsq%])")
+FORMAT_TEXT = {"d": r"-?\d*", "i": r"-?\d*", "u": r"\d*", "o": r"[0-7]*", "x": r"[0-9a-f]*",
+               "X": r"[0-9A-F]*", "c": r"(?s:.)", "%": "%"}
+
+
+def _str_shape(s):
+    """The value a literal string s is."""
+    return ("lit", s) if IDCHARS.match(s) else NONID
+
+
+def _format_shape(fmt):
+    """What string.format(fmt, ...) can make: NONID when its fixed text has
+    a character no identifier has, else a pattern; None if fmt is only
+    conversions."""
+    out, pos, fixed = [], 0, ""
+    for m in FORMAT_SPEC.finditer(fmt):
+        flags, conv = m.groups()
+        fixed += fmt[pos:m.start()] + ("%" if conv == "%" else "")
+        out.append(re.escape(fmt[pos:m.start()]))
+        # `#` adds a 0x prefix (or a point): anything, to be safe
+        out.append(".*" if "#" in flags else FORMAT_TEXT.get(conv, ".*"))
+        pos = m.end()
+    fixed += fmt[pos:]
+    out.append(re.escape(fmt[pos:]))
+    if not IDCHARS.match(fixed):
+        return NONID
+    return ("re", "".join(out)) if fixed else None
+
+
+def _ident(lit):
+    """The identifier a string literal spells (not a keyword), else None."""
+    if type(lit) is not Lit or lit.kind != "string":
+        return None
+    v = str_value(lit.text)
+    if v is None:
+        return None
+    s = v.decode("latin-1")
+    return s if IDENT.match(s) and s not in KEYWORDS else None
+
+
+def _stringish(shape):
+    return any(a[0] in STRINGISH for a in shape)
+
+
+SAME_TWICE = {"name", "number"}            # token kinds an index may be made of ...
+SAME_OPS = {"+", "-", "*", "//", "%", "(", ")"}   # ... with these: no call, no __index
+
+
+def _sub_span(args):
+    """For s:sub(i, j) (args: s, i, j), the most characters it can return
+    when j is i or i plus a small integer literal, and i is made of
+    variables, numbers and arithmetic only (so both evaluate the same);
+    else None."""
+    if len(args) != 3:
+        return None
+    i, j = [t[:2] for t in emit_tree(args[1])], [t[:2] for t in emit_tree(args[2])]
+    if not all(k in SAME_TWICE or (k == "op" and t in SAME_OPS) for k, t in i):
+        return None
+    if i == j:
+        return 1
+    if len(j) == len(i) + 2 and j[:len(i)] == i and j[len(i)] == ("op", "+") \
+            and j[-1][0] == "number" and j[-1][1].isdigit() and int(j[-1][1]) < 8:
+        return int(j[-1][1]) + 1
+    return None
+
+
+def _is_package(e, fields=("preload", "loaded")):
+    """Is e `package.preload` (or `package.loaded`)?"""
+    return (type(e) is Field and e.name in fields and type(e.obj) is Name
+            and e.obj.name == "package" and e.obj.b is not None and e.obj.b.kind == "global")
+
+
+def _key_literal(e):
+    """The key name of `t["k"]` (spec D13), except package.preload/loaded's
+    module names, which other passes read as literals."""
+    return None if _is_package(e.obj) else _ident(e.key)
+
+
+class _KeyFlow:
+    """The key-shape analysis (spec D14) of one whole program: what each
+    variable, parameter, return value and table slot can hold, as a set of
+    alternatives, worked out to a fixpoint ignoring statement order.
+
+    Functions and tables are values like any other: ("fn", id) follows a
+    function wherever it goes, so a call reaches exactly the functions its
+    callee can hold, and ("tbl", id) a table built at one constructor, so
+    what is stored in one table never leaks into another. A table's slots
+    are ("t", id, key) per key name, ("tn", id) for number (or other
+    non-string) keys and ("ts", id) for any other string key; a table the
+    analysis doesn't know (TBLQ: from the library, or a value it lost track
+    of) stores into the global slots ("k", key), DYN_N and DYN_S, which every
+    read sees too, and reads every table at once (the ("kall", key), ALLN,
+    ALLS and ALL aggregates). Metatables are followed: ("mt", id) holds what
+    setmetatable gave a table, and a read misses into `__index`."""
+
+    def __init__(self, info):
+        self.info = info
+        self.val = {}
+        self.funcs, self.va_of = {}, {}
+        self.calls, self.returns, self.assigns, self.tables = [], [], [], []
+        self.genfors, self.fstats, self.raws = [], [], []
+        self.bindings = [b for b in list(info.globals.values()) + info.locals if b.writes]
+        self.visit_block(info.prog, None)
+        self.dyn_mm = False             # a string key could spell a metamethod
+        self.key_escaped = False        # a key went where the analysis can't follow
+        self.changed = False
+        self.memo = {}
+
+    # ---- collecting the program
+    def visit_block(self, blk, F):
+        for s in blk.stmts:
+            t = type(s)
+            if t is Return and F is not None:
+                self.returns.append((F, s.exprs))
+            elif t is Assign:
+                self.assigns.append(s)
+            elif t is GenFor:
+                self.genfors.append(s)
+            elif t is FuncStat and (s.path or s.method):
+                self.fstats.append(s)
+            for e in stmt_exprs(s):
+                self.visit_expr(e, F)
+            if t in (LocalFunc, FuncStat):
+                self.visit_func(s.func)
+            else:
+                for sub in sub_blocks(s):
+                    self.visit_block(sub, F)
+
+    def visit_expr(self, e, F):
+        t = type(e)
+        if t is Func:
+            self.visit_func(e)
+            return
+        if t is Lit and e.kind == "vararg":
+            self.va_of[id(e)] = F
+        elif t in (Call, Method):
+            self.calls.append(e)
+        elif t is Table:
+            self.tables.append(e)
+        for c in children_expr(e):
+            self.visit_expr(c, F)
+
+    def visit_func(self, f):
+        self.funcs[id(f)] = f
+        if f.raw is not None:
+            self.raws.append(f)
+        else:
+            self.visit_block(f.body, f)
+
+    # ---- nodes
+    def get(self, node):
+        return self.val.get(node, EMPTY)
+
+    def add(self, node, shape):
+        if not shape:
+            return
+        cur = self.val.get(node)
+        if cur is None:
+            cur = self.val[node] = set()
+        if shape <= cur:
+            return
+        cur |= shape
+        self.changed = True
+        k = node[0] if type(node) is tuple else node
+        aggs = {"t": (("tall", node[1]), ("kall", node[-1]), "ALL"),
+                "tn": (("tall", node[1]), "ALLN", "ALL"),
+                "ts": (("tall", node[1]), "ALLS", "ALL"),
+                "k": (("kall", node[-1]), "GALL", "ALL"),
+                "DYN_N": ("ALLN", "GALL", "ALL"),
+                "DYN_S": ("ALLS", "GALL", "ALL")}.get(k, ())
+        for a in aggs:
+            self.val.setdefault(a, set()).update(shape)
+
+    def params(self, F):
+        return ([F.self_b] if F.is_method else []) + [p.b for p in F.params]
+
+    def fns(self, shape):
+        return [self.funcs[a[1]] for a in shape if a[0] == "fn"]
+
+    def ret(self, fid):
+        F = self.funcs[fid]
+        return self.top if F.raw is not None else self.get(("ret", fid))
+
+    # ---- table slots
+    @staticmethod
+    def kind(key_shape):
+        """How a non-literal key reads or writes a table: "s" for a string
+        (which could be any key name), else "n"."""
+        return "s" if _stringish(key_shape) else "n"
+
+    def read(self, obj, kind, k=None):
+        """What reading key k ("k"), a number key ("n") or any string key
+        ("s") of the tables obj can be gives."""
+        out = set()
+        for a in obj:
+            if a[0] == "tbl":
+                out |= self.read_t(a[1], kind, k, set())
+            elif a is TBLQ:
+                out |= self.read_q(kind, k)
+            elif (a[0] == "lib" and a[1] in LIB_TABLES) or (a[0] in STRINGISH and kind == "k"):
+                out |= self.read_g(kind, k)     # what the program put in a library table
+        return frozenset(out)
+
+    def read_g(self, kind, k):
+        if kind == "k":
+            return self.get(("k", k)) | self.get("DYN_S")
+        return self.get("DYN_N") if kind == "n" else self.get("GALL")
+
+    def read_q(self, kind, k):
+        if kind == "k":
+            return self.get(("kall", k)) | self.get("ALLS") | self.get("IDXRET")
+        return (self.get("ALLN") if kind == "n" else self.get("ALL")) | self.get("IDXRET")
+
+    def read_t(self, tid, kind, k, seen):
+        if tid in seen:
+            return EMPTY
+        seen.add(tid)
+        if kind == "k":
+            out = self.get(("t", tid, k)) | self.get(("ts", tid))
+        else:
+            out = self.get(("tn", tid) if kind == "n" else ("tall", tid))
+        out = out | self.read_g(kind, k)
+        for m in self.get(("mt", tid)):
+            if m[0] == "tbl":
+                for x in self.meta(m[1], "__index"):
+                    if x[0] == "tbl":
+                        out = out | self.read_t(x[1], kind, k, seen)
+                    elif x[0] == "fn":
+                        out = out | self.ret(x[1])
+                    elif x is TBLQ:
+                        out = out | self.read_q(kind, k)
+                    elif x is FNQ:
+                        out = out | self.top
+            elif m is TBLQ:
+                out = out | self.read_q(kind, k)
+        return out
+
+    def meta(self, mid, name):
+        """A metatable's field, as the runtime reads it (raw)."""
+        return self.get(("t", mid, name)) | self.get(("ts", mid)) | self.read_g("k", name)
+
+    def store(self, obj, kind, k, shape):
+        for a in obj:
+            if a[0] == "tbl":
+                self.store_t(a[1], kind, k, shape, set())
+            elif a is TBLQ or (a[0] == "lib" and a[1] in LIB_TABLES):
+                self.add(("k", k) if kind == "k" else "DYN_N" if kind == "n" else "DYN_S",
+                         shape)
+
+    def store_t(self, tid, kind, k, shape, seen):
+        if tid in seen:
+            return
+        seen.add(tid)
+        self.add(("t", tid, k) if kind == "k" else ("tn", tid) if kind == "n" else ("ts", tid),
+                 shape)
+        for m in self.get(("mt", tid)):         # a new key may go to __newindex
+            if m[0] == "tbl":
+                for x in self.meta(m[1], "__newindex"):
+                    if x[0] == "tbl":
+                        self.store_t(x[1], kind, k, shape, seen)
+                    elif x[0] == "fn" and self.funcs[x[1]].raw is None:
+                        ps = self.params(self.funcs[x[1]])
+                        if len(ps) > 2:
+                            self.add(("b", id(ps[2])), shape)
+                    elif x is TBLQ:
+                        self.store([TBLQ], kind, k, shape)
+
+    # ---- the shape of an expression
+    def S(self, e):
+        r = self.memo.get(id(e))
+        if r is None:
+            r = self.memo[id(e)] = self._S(e)
+        return r
+
+    def _S(self, e):
+        t = type(e)
+        if t is Lit:
+            if e.kind == "string":
+                v = str_value(e.text)
+                return frozenset({NONID if v is None else _str_shape(v.decode("latin-1"))})
+            if e.kind == "vararg":
+                F = self.va_of.get(id(e))
+                return self.get(("va", id(F))) if F is not None else EMPTY
+            return EMPTY
+        if t is Name:
+            b = e.b
+            if b is None:
+                return self.top
+            s = self.get(("b", id(b)))
+            if b.kind == "global" and b.reserved and b.name not in CALLBACKS:
+                s = s | {("lib", b.name)}
+            return s
+        if t is Paren:
+            return self.S(e.e)
+        if t is Func:
+            return frozenset({("fn", id(e))})
+        if t is Table:
+            return frozenset({("tbl", id(e))})
+        if t is Un:
+            return EMPTY if e.op == "not" else self.get("OPS")
+        if t is Bin:
+            if e.op in ("and", "or"):
+                return self.S(e.a) | self.S(e.b)
+            if e.op in ("==", "~=", "<", "<=", ">", ">="):
+                return EMPTY
+            if e.op == "..":
+                return self.concat(e) | self.get("OPS")
+            return self.get("OPS")
+        if t is Field:
+            o = self.S(e.obj)
+            return self.member(o, e.name) | self.read(o, "k", e.name)
+        if t is Index:
+            o, k = self.S(e.obj), _key_literal(e)
+            if k is not None:
+                return self.member(o, k) | self.read(o, "k", k)
+            return self.read(o, self.kind(self.S(e.key)))
+        if t in (Call, Method):
+            return self.call_result(e)
+        return self.top
+
+    def member(self, obj, k):
+        """Library members a read of key k on obj can give: `string.format`,
+        or a string's method through the string metatable."""
+        out = {("lib", f"{a[1]}.{k}") for a in obj if a[0] == "lib" and a[1] in LIB_TABLES}
+        if k in STRING_LIB and _stringish(obj):
+            out.add(("lib", "string." + k))
+        return frozenset(out)
+
+    def lit_alts(self, e):
+        """The literal strings e can be, when it is one (or a variable only
+        ever set to one); else None."""
+        if type(e) is Paren:
+            return self.lit_alts(e.e)
+        if type(e) is Lit and e.kind == "string":
+            v = str_value(e.text)
+            return None if v is None else {v.decode("latin-1")}
+        if type(e) is Lit and e.kind == "number":
+            v = lit_value(e)
+            return {str(v[1])} if v and v[0] == "int" and v[1] >= 0 else None
+        if type(e) is Name and e.b is not None and e.b.writes and not e.b.pinned:
+            out = set()
+            for w in e.b.writes:
+                if w.kind not in ("local", "assign") or type(w.value) is not Lit \
+                        or w.value.kind != "string":
+                    return None
+                out |= self.lit_alts(w.value)
+            return out
+        return None
+
+    def concat(self, e):
+        """`a .. b .. c`: a pattern made of what each piece can be (D14);
+        NONID when a piece always holds a non-identifier character; ANY when
+        no piece is known at all."""
+        pieces, todo = [], [e]
+        while todo:
+            x = todo.pop()
+            while type(x) is Paren:
+                x = x.e
+            if type(x) is Bin and x.op == "..":
+                todo += [x.b, x.a]
+            else:
+                pieces.append(x)
+        parts = []
+        for p in pieces:
+            sh = self.S(p)
+            strs = [a for a in sh if a[0] in STRINGISH]
+            if strs and all(a is NONID for a in strs) and len(strs) == len(sh):
+                return frozenset({NONID})
+            alts = set()
+            for a in strs:
+                alts.add(re.escape(a[1]) if a[0] == "lit" else a[1] if a[0] == "re" else
+                         ".{0,%d}" % a[1] if a[0] == "len" else ".*")
+            if len(strs) < len(sh) or not sh:
+                # a number, as `..` writes it (not ".*": a piece knows nothing
+                # yet in the first rounds, and ANY then would stick)
+                alts.add(NUMBER_RX)
+            parts.append(".*" if ".*" in alts or len(alts) > 16 else
+                         "(?:" + "|".join(sorted(alts)) + ")")
+        rx = "".join(parts)
+        if all(x in (".*", "(?:)") for x in parts) or len(rx) > 400:
+            return frozenset({ANY})
+        return frozenset({("re", rx)})
+
+    def callee(self, e):
+        """(the values a call's callee can be, its arguments as a list)."""
+        if type(e) is Method:
+            o = self.S(e.obj)
+            return self.member(o, e.name) | self.read(o, "k", e.name), [e.obj] + list(e.args)
+        return self.S(e.fn), list(e.args)
+
+    def arg(self, args, i):
+        if i < len(args):
+            return self.S(args[i])
+        if args and is_multi(args[-1]):
+            return self.S(args[-1])
+        return EMPTY
+
+    def args_from(self, args, i):
+        out = set()
+        for j in range(i, max(len(args), i + 1)):
+            out |= self.arg(args, j)
+        return frozenset(out)
+
+    def call_result(self, e):
+        c, args = self.callee(e)
+        out = set(self.get("CALLRET"))
+        for a in c:
+            if a[0] == "fn":
+                out |= self.ret(a[1])
+            elif a[0] == "lib":
+                out |= self.lib_result(a[1], e, args)
+            elif a is FNQ:
+                out |= self.top
+        return frozenset(out)
+
+    @property
+    def top(self):
+        """Any value at all: a key only once one has gone where the analysis
+        can't follow it (key_escaped)."""
+        return TOP if self.key_escaped else TOP - {KEY}
+
+    def lib_result(self, name, e, args):
+        """What calling library function name returns (any value when the
+        analysis doesn't know it)."""
+        r = self._lib(name, e, args)
+        return self.top if r is None else r
+
+    def module(self, args):
+        """The preload function a literal `require "m"` runs, else None."""
+        m = self.lit_alts(args[0]) if args else None
+        if m and len(m) == 1 and next(iter(m)) in self.info.preloads:
+            return self.info.preloads[next(iter(m))][1]
+        return None
+
+    def _lib(self, name, e, args):
+        A = lambda i: self.arg(args, i)
+        if name in TIC80_API or (name.startswith("math.") and name != "math.type"):
+            return EMPTY
+        if name in LIT_RESULTS:
+            return frozenset(("lit", s) for s in LIT_RESULTS[name])
+        if name == "tostring":
+            a0 = A(0)
+            strs = frozenset(a for a in a0 if a[0] in STRINGISH)
+            return strs | self.get("TSRET") | ({NUMBER_TEXT} if len(strs) < len(a0) or not a0
+                                               else EMPTY)
+        if name == "string.format":
+            fmts = self.lit_alts(args[0]) if args else None
+            if not fmts:
+                return frozenset({ANY})
+            out = {_format_shape(f) for f in fmts}
+            return frozenset({ANY}) if None in out else frozenset(out)
+        if name in ("tonumber", "rawlen", "rawequal", "collectgarbage", "error",
+                    "coroutine.create", "coroutine.running", "coroutine.isyieldable",
+                    "table.insert", "table.sort", "string.byte", "string.len",
+                    "string.packsize"):
+            return EMPTY
+        if name in ("select", "assert"):
+            return self.args_from(args, 1 if name == "select" else 0)
+        if name == "setmetatable":
+            return A(0)
+        if name == "getmetatable":
+            mts = set()
+            for a in A(0):
+                if a[0] == "tbl":
+                    mts |= self.get(("mt", a[1]))
+                elif a[0] in STRINGISH or a is TBLQ:
+                    mts.add(TBLQ)
+            return frozenset(mts) | self.read(mts, "k", "__metatable")
+        if name == "next":
+            return frozenset({KEY}) | self.read(A(0), "s")
+        if name == "pairs":
+            return frozenset({("lib", "next")}) | A(0)
+        if name == "ipairs":
+            return frozenset({("lib", "<ipairs>")}) | A(0)
+        if name in ("table.unpack", "table.remove", "<ipairs>"):
+            return self.read(A(0), "n")
+        if name == "table.pack":
+            return frozenset({("tbl", id(e)) if e is not None else TBLQ})
+        if name == "table.move":
+            return A(4) if len(args) > 4 else A(0)
+        if name == "require":
+            F = self.module(args)
+            return None if F is None else self.ret(id(F))
+        if name in ("pcall", "xpcall"):
+            out = {ANY}                             # false and the error message
+            rest = args[1:] if name == "pcall" else args[2:]
+            for a in A(0):
+                if a[0] == "fn":
+                    out |= self.ret(a[1])
+                elif a[0] == "lib":
+                    out |= self.lib_result(a[1], None, rest)
+                elif a is FNQ:
+                    out |= self.top
+            return frozenset(out)
+        if name == "string.sub":
+            return self.substrings(args)
+        if name == "string.gmatch":
+            return frozenset({("lib", "<gmatch>")})
+        if name == "<gmatch>":
+            return frozenset({ANY})
+        if name == "coroutine.wrap":
+            return frozenset({FNQ})
+        if name == "string.char" and args and not is_multi(args[-1]):
+            return frozenset({("len", len(args))})
+        if name.startswith("string.") or name == "table.concat":
+            return frozenset({ANY})
+        return None
+
+    def substrings(self, args):
+        """s:sub(i, j) with s a literal: its characters when i and j are the
+        same expression, else every piece of it; with s any other string, a
+        string of at most j - i + 1 characters when that is a constant
+        (`s:sub(i, i)`, `s:sub(i, i + 2)`), else any string (D14)."""
+        span = _sub_span(args)
+        alts = self.lit_alts(args[0]) if args else None
+        if not alts or sum(len(a) for a in alts) > 64:
+            return frozenset({("len", span) if span else ANY})
+        out = set()
+        for s in alts:
+            if span == 1:
+                out.update(s)
+            else:
+                out.update(s[i:j] for i in range(len(s)) for j in range(i + 1, len(s) + 1))
+        return frozenset(_str_shape(x) for x in out)
+
+    # ---- the constraints, one round
+    def flow(self, F, args):
+        """A call reaching F passes args to its parameters."""
+        if F.raw is not None:
+            return
+        ps = self.params(F)
+        for i, b in enumerate(ps):
+            self.add(("b", id(b)), self.arg(args, i))
+        if F.vararg:
+            self.add(("va", id(F)), self.args_from(args, len(ps)))
+
+    def top_params(self, F, shape=None):
+        if F.raw is not None:
+            return
+        shape = self.top if shape is None else shape
+        for b in self.params(F):
+            self.add(("b", id(b)), shape)
+        if F.vararg:
+            self.add(("va", id(F)), shape)
+
+    def write(self, w):
+        if w.kind in ("localfunc", "func"):
+            return frozenset({("fn", id(w.value))})
+        if w.kind in ("param", "for") or w.value is NILV:
+            return EMPTY
+        if w.value is MULTI:
+            return self.S(w.stmt.exprs[-1])
+        return self.S(w.value)
+
+    def assign_target(self, tg, shape):
+        if type(tg) is Field:
+            self.store(self.S(tg.obj), "k", tg.name, shape)
+        elif type(tg) is Index and not _is_package(tg.obj):
+            k = _key_literal(tg)
+            if k is not None:
+                self.store(self.S(tg.obj), "k", k, shape)
+            else:
+                self.store(self.S(tg.obj), self.kind(self.S(tg.key)), None, shape)
+
+    def round(self):
+        self.memo = {}
+        for b in self.bindings:
+            for w in b.writes:
+                self.add(("b", id(b)), self.write(w))
+        for F, exprs in self.returns:
+            for x in exprs:
+                self.add(("ret", id(F)), self.S(x))
+        for s in self.assigns:
+            vals = pair_values(len(s.targets), s.exprs)
+            for tg, v in zip(s.targets, vals):
+                if type(tg) is not Name:
+                    self.assign_target(tg, EMPTY if v is NILV else
+                                       self.S(s.exprs[-1]) if v is MULTI else self.S(v))
+        for s in self.fstats:
+            o = self.S(s.base)
+            names = [p[0] for p in s.path] + ([s.method[0]] if s.method else [])
+            for n in names[:-1]:
+                o = self.member(o, n) | self.read(o, "k", n)
+            self.store(o, "k", names[-1], frozenset({("fn", id(s.func))}))
+        for e in self.tables:
+            tid = id(e)
+            for kind, key, val, _ in e.fields:
+                if kind == "named":
+                    self.store_t(tid, "k", key[0], self.S(val), set())
+                elif kind == "index":
+                    k = _ident(key)
+                    if k:
+                        self.store_t(tid, "k", k, self.S(val), set())
+                    else:
+                        self.store_t(tid, self.kind(self.S(key)), None, self.S(val), set())
+                elif kind == "pos":
+                    self.store_t(tid, "n", None, self.S(val), set())
+        for e in self.calls:
+            c, args = self.callee(e)
+            for a in c:
+                if a[0] == "fn":
+                    self.flow(self.funcs[a[1]], args)
+                elif a[0] == "lib":
+                    self.lib_effects(a[1], e, args)
+                elif a is FNQ:
+                    for F in self.fns(self.get("UNK")):
+                        self.top_params(F)
+            if not self.key_escaped and self.opaque(c, e, args) and \
+                    any(KEY in self.arg(args, i) for i in range(len(args))):
+                self.escape()
+        if not self.key_escaped and any(KEY in self.ret(id(F))
+                                        for F in self.fns(self.get("UNK"))):
+            self.escape()
+        for s in self.genfors:
+            self.loop(s)
+        self.metamethods()
+
+    def opaque(self, c, e, args):
+        """Can a call with callee values c hand its arguments to code the
+        analysis doesn't follow: a coroutine, a library function it doesn't
+        know, a function from the library, or a table's __call?"""
+        return any(a is FNQ or a is TBLQ or a[0] == "tbl" or
+                   (a[0] == "lib" and (a[1].startswith("coroutine.")
+                                       or self._lib(a[1], e, args) is None))
+                   for a in c)
+
+    def escape(self):
+        """A key reached code the analysis doesn't follow: from now on any
+        value that comes back from there may be a key."""
+        self.key_escaped = True
+        self.changed = True
+
+    def lib_effects(self, name, e, args):
+        A = lambda i: self.arg(args, i)
+        if name == "table.insert" and args:
+            self.store(A(0), "n", None, self.S(args[-1]))
+        elif name == "table.pack":
+            self.store_t(id(e), "n", None, self.args_from(args, 0), set())
+        elif name == "table.move" and len(args) >= 4:
+            self.store(A(4) if len(args) > 4 else A(0), "n", None, self.read(A(0), "n"))
+        elif name == "table.sort":
+            for F in self.fns(A(1)):
+                self.top_params(F, self.read(A(0), "n"))
+        elif name == "setmetatable":
+            mt = frozenset(a for a in A(1) if a[0] == "tbl")
+            if any(a[0] != "tbl" for a in A(1)):
+                mt = mt | {TBLQ}
+            for a in A(0):
+                if a[0] == "tbl":
+                    self.add(("mt", a[1]), mt)
+        elif name == "pcall":
+            for F in self.fns(A(0)):
+                self.flow(F, args[1:])
+        elif name == "xpcall":
+            for F in self.fns(A(0)):
+                self.flow(F, args[2:])
+            for F in self.fns(A(1)):
+                self.top_params(F)
+        elif name == "require":
+            F = self.module(args)
+            if F is not None:                   # a module's `...`: its name
+                self.top_params(F, frozenset(_str_shape(m) for m in self.lit_alts(args[0])))
+        elif name in ("coroutine.create", "coroutine.wrap") or \
+                self._lib(name, e, args) is None:
+            # coroutines, and library functions the analysis doesn't know,
+            # may call a program function they hold with anything, or hand it
+            # back (coroutine.wrap): it escapes. (map's remap callback gets
+            # numbers; the rest of the library calls nothing.)
+            for i in range(len(args)):
+                fs = self.fns(A(i))
+                for F in fs:
+                    self.top_params(F)
+                self.add("UNK", frozenset(("fn", id(F)) for F in fs))
+
+    def loop(self, s):
+        names = [n.b for n in s.names]
+        e0 = s.exprs[0]
+        it = self.S(e0)
+        # the table pairs/ipairs/next walks: pairs(t), ipairs(t), or `next, t`
+        if type(e0) in (Call, Method):
+            c, args = self.callee(e0)
+            walked = self.arg(args, 0) if any(a[0] == "lib" and a[1] in ("pairs", "ipairs")
+                                              for a in c) else frozenset({TBLQ})
+        else:
+            walked = self.S(s.exprs[1]) if len(s.exprs) > 1 else frozenset({TBLQ})
+        for a in it:
+            if a == ("lib", "next"):
+                self.add(("b", id(names[0])), frozenset({KEY}) | self.get("PAIRS"))
+                for b in names[1:]:
+                    self.add(("b", id(b)), self.read(walked, "s") | self.get("PAIRS"))
+            elif a == ("lib", "<ipairs>"):
+                for b in names[1:]:
+                    self.add(("b", id(b)), self.read(walked, "n"))
+            elif a == ("lib", "<gmatch>"):
+                for b in names:
+                    self.add(("b", id(b)), frozenset({ANY}))
+            elif a[0] == "fn":
+                ret = self.ret(a[1])
+                for b in names:
+                    self.add(("b", id(b)), ret)
+                state = set(it) | self.get(("b", id(names[0])))
+                for x in s.exprs[1:]:
+                    state |= self.S(x)
+                self.top_params(self.funcs[a[1]], frozenset(state))
+            elif (a[0] == "lib" and a[1] not in LIB_TABLES) or a is FNQ:
+                for b in names:
+                    self.add(("b", id(b)), self.top)
+
+    def metamethods(self):
+        """Functions the runtime calls (spec D14): stored under a `__` key in
+        any table, or under any string key when one could spell a
+        metamethod (<dyn>)."""
+        dyn = self.fns(self.get("ALLS")) if self.dyn_mm else []
+        keys = [k[1] for k in list(self.val) if type(k) is tuple and k[0] == "kall"
+                and k[1].startswith("__")]
+        for name in keys + (["<dyn>"] if dyn else []):
+            fs = dyn if name == "<dyn>" else self.fns(self.get(("kall", name)))
+            for F in fs:
+                rets = self.ret(id(F))
+                if name in ("__index", "__newindex", "<dyn>"):
+                    ps = self.params(F) if F.raw is None else []
+                    if ps:
+                        self.add(("b", id(ps[0])), frozenset({TBLQ}))
+                    if len(ps) > 1:
+                        self.add(("b", id(ps[1])), frozenset({KEY}))
+                    for b in ps[2:]:
+                        self.add(("b", id(b)), self.get("GALL"))
+                    if F.vararg:
+                        self.add(("va", id(F)), self.get("GALL"))
+                    if name != "__newindex":
+                        self.add("IDXRET", rets)
+                if name not in NOT_CALLED_MM:
+                    self.top_params(F, TOP)     # an operand may be a key
+                    if name in ARITH_MM or name == "<dyn>":
+                        self.add("OPS", rets)
+                    if name in ("__call", "<dyn>"):
+                        self.add("CALLRET", rets)
+                    if name in ("__tostring", "<dyn>"):
+                        self.add("TSRET", rets)
+                    if name in ("__pairs", "<dyn>"):
+                        self.add("PAIRS", self.top)
+
+    def solve(self, rounds=200):
+        for _ in range(rounds):
+            self.changed = False
+            self.round()
+            if not self.changed:
+                self.memo = {}
+                return True
+        return False
+
+
+class KeyOff(Exception):
+    """Key renaming can't be proven safe: the reason, with its code line."""
+
+
+def pass_keys(info, report):
+    """Rename table keys (spec R13). Returns how many keys were renamed (0
+    when the pass is off; report.keys_off says why)."""
+    report.keys_renamed, report.keys_kept, report.keys_off = 0, {}, None
+    try:
+        return _pass_keys(info, report)
+    except KeyOff as e:
+        report.keys_off = str(e)
+        return 0
+
+
+def _pass_keys(info, report):
+    prog = info.prog
+    if not info.whole:
+        raise KeyOff("a module on its own (fragment mode): its keys are its interface")
+    if info.dynamic is not None:
+        raise KeyOff(f"dynamic access ({info.dynamic})")
+    fl = _KeyFlow(info)
+    if fl.raws:
+        raise KeyOff(f"line {fl.raws[0].raw.line}: code kept by NOMINIFY is not analysed,"
+                     " and may use any key")
+
+    # every key position (D13) and every value literal
+    sites, lits = [], set()
+    def note(name, node, how):
+        sites.append((name, node, how))
+    for s in fl.fstats:
+        for i, (name, _) in enumerate(s.path):
+            note(name, s, ("path", i))
+        if s.method:
+            note(s.method[0], s, "method")
+    def visit(e):
+        t = type(e)
+        if t in (Field, Method):
+            note(e.name, e, "attr")
+        elif t is Index:
+            k = _key_literal(e)
+            if k is not None:
+                note(k, e, "index")
+        elif t is Table:
+            for f in e.fields:
+                if f[0] == "named":
+                    note(f[1][0], f, "named")
+                elif f[0] == "index" and _ident(f[1]) is not None:
+                    note(_ident(f[1]), f, "ctor")
+    keylits = set()
+    def mark(e):
+        if type(e) is Index and _key_literal(e) is not None:
+            keylits.add(id(e.key))
+        elif type(e) is Table:
+            keylits.update(id(f[1]) for f in e.fields if f[0] == "index" and _ident(f[1]))
+    walk_exprs(prog, mark)
+    def literal(e):
+        if type(e) is Lit and e.kind == "string" and id(e) not in keylits:
+            v = str_value(e.text)
+            if v is not None:
+                lits.add(v.decode("latin-1"))
+    walk_exprs(prog, literal)
+    walk_exprs(prog, visit)
+
+    fl.dyn_mm = any(s.startswith("__") for s in lits)
+    if not fl.solve():
+        raise KeyOff("the analysis did not settle")
+
+    # what reaches each key position and each place a key is looked at (R13d-f)
+    keep_lit, keep_re, keep_len = set(), set(), [0]
+    def key_check(shape, line, what):
+        for a in shape:
+            if a is ANY:
+                raise KeyOff(f"line {line}: {what} can be a string built at runtime")
+            if a[0] == "lit":
+                keep_lit.add(a[1])
+            elif a[0] == "re":
+                keep_re.add(a[1])
+            elif a[0] == "len":
+                keep_len[0] = max(keep_len[0], a[1])
+    def seen(shape, line, what):
+        if KEY in shape:
+            raise KeyOff(f"line {line}: a table key {what}, so its spelling would show")
+    S = fl.S
+    def builds_string(r):
+        """gsub's replacement is a string: a literal, a concatenation, or a
+        call that can only be tostring or a string function."""
+        while type(r) is Paren:
+            r = r.e
+        if (type(r) is Lit and r.kind == "string") or type(r) is Func or \
+                (type(r) is Bin and r.op == ".."):
+            return True
+        if type(r) in (Call, Method):
+            c = fl.callee(r)[0]
+            return bool(c) and all(a[0] == "lib" and (a[1] == "tostring"
+                                                      or a[1].startswith("string."))
+                                   for a in c)
+        return False
+    def check(e):
+        t = type(e)
+        if t is Index and _key_literal(e) is None and not _is_package(e.obj):
+            key_check(S(e.key), e.line, "a table key")
+        elif t is Table:
+            for f in e.fields:
+                if f[0] == "index" and _ident(f[1]) is None:
+                    key_check(S(f[1]), e.line, "a table key")
+        elif t is Bin:
+            a, b = S(e.a), S(e.b)
+            if e.op in ("==", "~="):
+                if KEY in a:
+                    key_check(b, e.line, "a string compared with a key")
+                if KEY in b:
+                    key_check(a, e.line, "a string compared with a key")
+            elif e.op == "..":
+                seen(a | b, e.line, "is joined into a string")
+            elif e.op in ("<", "<=", ">", ">="):
+                seen(a | b, e.line, "is compared by order")
+        elif t is Un and e.op == "#":
+            seen(S(e.a), e.line, "is measured with #")
+        elif t in (Call, Method):
+            c, args = fl.callee(e)
+            for a in c:
+                if a[0] == "lib":
+                    name = a[1]
+                    if name == "string.gsub" and len(args) > 2 and not builds_string(args[2]):
+                        raise KeyOff(f"line {e.line}: gsub's replacement may be a table,"
+                                     " whose keys gsub looks up by the captured text")
+                    if name in ("table.concat", "table.sort") and \
+                            (name == "table.concat" or len(args) < 2):
+                        seen(fl.read(fl.arg(args, 0), "n"), e.line,
+                             f"may be in a list given to {name}")
+                    if name not in KEY_BLIND and not name.startswith("math."):
+                        for x in (args[1:] if name == "assert" else args):
+                            seen(S(x), e.line, f"is passed to {name}")
+                elif a is FNQ:
+                    for x in args:
+                        seen(S(x), e.line, "is passed to a function from the library")
+    walk_exprs(prog, check)
+
+    # what keeps its name (R13b-d)
+    patterns = [re.compile(r, re.S) for r in sorted(keep_re)]
+    def spelled(name):
+        """Could a string built at runtime that reaches a key be name?"""
+        return name in keep_lit or len(name) <= keep_len[0] or \
+            any(p.fullmatch(name) for p in patterns)
+    reasons = {}
+    def why(name):
+        if name in LIBRARY_KEYS or name.startswith("__"):
+            return "library or metamethod"
+        if name in lits:
+            return "also a string literal"
+        if spelled(name):
+            return "a key built from strings could spell it"
+        return None
+    count, first = {}, {}
+    for i, (name, _, _) in enumerate(sites):
+        count[name] = count.get(name, 0) + 1
+        first.setdefault(name, i)
+    fixed = set(LIBRARY_KEYS) | lits | keep_lit
+    cands = []
+    for name in count:
+        r = why(name)
+        if r:
+            reasons.setdefault(r, set()).add(name)
+            fixed.add(name)
+        else:
+            cands.append(name)
+    cands.sort(key=lambda n: (-count[n], first[n]))
+
+    def usable(n):
+        return n[0] != "_" and not spelled(n)
+    # a key the pool can't shorten keeps its name, and so leaves the pool:
+    # repeat until that settles
+    stay = {n for n in cands if len(n) == 1}
+    while True:
+        pool = (n for n in name_pool(fixed | stay) if usable(n))
+        new, more = {}, set()
+        for n in cands:
+            if n in stay:
+                continue
+            p = next(pool)
+            if len(p) < len(n):
+                new[n] = p
+            else:
+                more.add(n)
+        if not more:
+            break
+        stay |= more
+    if not new:
+        report.keys_kept = {r: sorted(v) for r, v in reasons.items()}
+        return 0
+
+    # rename every site; a key literal becomes a field (t.k, {k=})
+    for name, node, how in sites:
+        n = new.get(name, name)
+        if how == "attr":
+            node.name = n
+        elif how == "index":
+            node.__class__ = Field
+            node.name = n
+            del node.key
+        elif how == "named":
+            node[1] = (n, node[1][1])
+        elif how == "ctor":
+            node[0], node[1] = "named", (n, node[1].line)
+        elif how == "method":
+            node.method = (n, node.method[1])
+        else:
+            i = how[1]
+            node.path[i] = (n, node.path[i][1])
+    lines = {}
+    for name, node, how in sites:
+        if name in new and name not in lines:
+            lines[name] = node[1][1] if type(node) is list else node.line
+    for name in cands:
+        if name in new:
+            report.renames.append((new[name], name, "field", lines[name]))
+    report.keys_renamed = len(new)
+    report.keys_kept = {r: sorted(v) for r, v in reasons.items()}
+    return len(new)
+
+
+# =============================================================================
 # Layout (spec R3) and the max pipeline
 # =============================================================================
 
@@ -2941,7 +4015,8 @@ def layout(toks, width=120):
 
 # What each option saved, by source line: measured only (savings=True), so
 # no pass depends on it.
-SAVINGS = ("comments", "whitespace", "constants", "extra", "rename-vars", "rename-functions")
+SAVINGS = ("comments", "whitespace", "constants", "extra", "rename-vars", "rename-functions",
+           "rename-tables")
 
 
 class Savings:
@@ -3136,6 +4211,8 @@ class Report:
         self.comments = []                        # lines of comments kept by NOMINIFY
         self.folded = self.sugar = self.merged = self.dropped_params = 0
         self.disqualified, self.zero_write, self.dynamic = {}, [], None
+        self.keys_ran = False                     # rename-tables (spec R13)
+        self.keys_renamed, self.keys_kept, self.keys_off = 0, {}, None
         self.sizes = []          # (pass, chars)
         self.rounds = 0
         self.savings = None      # Savings, when asked for
@@ -3170,6 +4247,14 @@ class Report:
              [f"{n}: {w}" for n, w in sorted(self.disqualified.items())])
         sect("globals never written (always nil)", self.zero_write)
         out.append(""); out.append(f"identifiers renamed: {len(self.renames)}")
+        if self.keys_ran:
+            if self.keys_off:
+                out.append(f"table keys: not renamed - {self.keys_off}")
+            else:
+                out.append(f"table keys renamed: {self.keys_renamed}")
+                for why, names in sorted(self.keys_kept.items()):
+                    if why != "library or metamethod":
+                        sect(f"table keys kept: {why}", names)
         sect("functions and modules kept verbatim by a NOMINIFY comment",
              [f"line {l}" for l in sorted(self.verbatim)])
         sect("names kept by a NOMINIFY comment",
@@ -3278,6 +4363,14 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
     if savings:
         stage["optimised"] = _tok_lines(toks)
 
+    if "rename-tables" in passes:
+        rep.keys_ran = True
+        if pass_keys(info_of(prog), rep):
+            toks = emit_tree(prog); prog = reparse(strip_nl(toks))
+        rep.sizes.append(("keys", toklen(toks)))
+    if savings:
+        stage["keys"] = _tok_lines(toks)
+
     if "sugar" in passes:
         pass_sugar(prog, rep)
     def worst_upvals(prog):                       # Lua 5.3 allows 255 upvalues per function
@@ -3361,8 +4454,8 @@ def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
     functions' names saved is counted as it renames them."""
     sv = Savings()
     source, com = _src_lines(src), _comment_lines(src, nomi.keep())
-    inp, opt, small, ren, fn = (stage[k] for k in ("input", "optimised", "small", "renamed",
-                                                   "functions renamed"))
+    inp, opt, keys, small, ren, fn = (stage[k] for k in ("input", "optimised", "keys", "small",
+                                                         "renamed", "functions renamed"))
     final = _final_lines(text, toks)
     fix = _lin((1, inp), (-1, opt))
     if "inline" in passes and passes & {"fold", "dce", "shake"}:
@@ -3381,7 +4474,8 @@ def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
     sv.add("whitespace", _lin((1, source), (-1, com), (-1, inp), (1, ren), (-1, final)))
     sv.add("constants", const)
     sv.add("extra", _lin((1, fix), (-1, const)))
-    sv.add(tidy, _lin((1, opt), (-1, small)))
+    sv.add("rename-tables", _lin((1, opt), (-1, keys)))
+    sv.add(tidy, _lin((1, keys), (-1, small)))
     sv.add("rename-vars", _lin((1, small), (-1, ren), (-1, fn)))
     sv.add("rename-functions", fn)
     sv.add("final", final)
@@ -3426,9 +4520,9 @@ def minify(src, mode="max", whole_program=True, **opts):
     """Minify Lua source; returns the text.
 
     mode: option names, e.g. 'comments,rename-vars' (see the module
-    docstring), 'default' for every option but rename-functions, 'max' for
-    every option (whole-program optimisation, minify-spec.md), or '' for
-    none (passthrough).
+    docstring), 'default' for every option but rename-functions and
+    rename-tables, 'max' for every option (whole-program optimisation,
+    minify-spec.md), or '' for none (passthrough).
     whole_program=False treats src as a fragment (one module on its own):
     globals are then never inlined, removed or renamed.
     """

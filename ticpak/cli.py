@@ -42,7 +42,8 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak bundle --verbose          ...showing progress, the check's detail, minify savings
   ticpak check                    check the existing .tic: summary only
   ticpak check --verbose          ...and the full check report
-  ticpak bundle -f -m              the default minify options (all but rename-functions)
+  ticpak bundle -f -m              the default minify options (all but rename-functions
+                                   and rename-tables)
   ticpak bundle -f -m=max          every minify option (smallest cart)
   ticpak bundle -f -m=comments,whitespace   just those minify options
   ticpak bundle path/to/main.lua   a cart elsewhere
@@ -80,7 +81,7 @@ def minify_arg(text):
             f"unknown minify option {', '.join(map(repr, bad)) or repr(text)}"
             f" (expected one or more of {', '.join(minifier.OPTIONS)}, or default"
             " or max; --minify alone means default: every option but"
-            " rename-functions)")
+            " rename-functions and rename-tables)")
     return minifier.parse_options(items)
 
 
@@ -108,9 +109,11 @@ def ask_minify(ui, minify):
                "none": frozenset()}
     current = next((k for k, v in presets.items() if v == minify), "pick")
     choice = ui.select("Minification:", [
-        ("default", "default  - every option but rename-functions (small, readable errors)"),
+        ("default", "default  - every option but rename-functions and rename-tables"
+                    " (small, readable errors)"),
         ("comments", "comments - remove comments only"),
-        ("max", "max      - every option, rename-functions too (smallest cart)"),
+        ("max", "max      - every option, rename-functions and rename-tables too"
+                " (smallest cart)"),
         ("none", "none     - no minification (the bundled source verbatim)"),
         ("pick", "choose individual minification options..."),
     ], default=current)
@@ -243,7 +246,8 @@ def parse_args(argv):
     ap.add_argument("-m", "--minify", metavar="OPTION,...", type=minify_arg, nargs="?",
                     const=minifier.DEFAULT_OPTIONS, default=None,
                     help="minify the bundle: --minify alone applies the default"
-                         " options (every option but rename-functions);"
+                         " options (every option but rename-functions and"
+                         " rename-tables);"
                          " --minify=max every option; --minify=OPTION,... only"
                          " those (" + ", ".join(minifier.OPTIONS) + "; see the"
                          " documentation below)."
@@ -305,7 +309,8 @@ def minify_command(argv):
     ap = argparse.ArgumentParser(
         prog="ticpak minify", usage="%(prog)s [options] FILE.lua    (writes to stdout)",
         description="Minify one Lua file; with no option given, the default options\n"
-                    "apply (every option but --rename-functions; --max adds it).\n\n"
+                    "apply (every option but --rename-functions and --rename-tables;\n"
+                    "--max adds them).\n\n"
                     "A cart (main.lua, or a file with a metadata header or asset\n"
                     "sections) keeps its header and asset sections. A cart that\n"
                     "requires no modules is the whole program, so anything it doesn't\n"
@@ -322,7 +327,7 @@ def minify_command(argv):
                         help="further optimisations (listed below)" if o == "extra"
                         else minifier.OPTION_HELP[o])
     ap.add_argument("--max", dest="options", action="append_const", const="max",
-                    help="every option, rename-functions included")
+                    help="every option, rename-functions and rename-tables included")
     args = ap.parse_args(argv)
     if not os.path.isfile(args.file):
         sys.exit(f"minify: {args.file} not found")

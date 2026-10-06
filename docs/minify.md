@@ -3,7 +3,8 @@
 `ticpak/minify.py` is the minification stage of [`ticpak`](ticpak). Its
 `max` mode is a whole-program optimiser for the bundled cart that `ticpak`
 builds. It inlines constants, folds constant expressions, removes dead code and
-unused definitions, renames variables (and, on request, functions), and lays
+unused definitions, renames variables (and, on request, functions and table
+keys), and lays
 the result out with one function start per line, wrapped at 120 columns. Header metadata and asset
 chunks pass through unchanged. It uses only the Python standard library.
 
@@ -20,6 +21,7 @@ Minification is a set of options (`--minify=comments,rename-vars` for
 | `comments` | Removes comments and nothing else: indentation, blank lines and line breaks stay as written. A line that held only comments is dropped. Header metadata and asset chunks pass through. | (comment stripper) |
 | `rename-vars` | Variables get the shortest free names (1–2 letters). A `NOMINIFY` comment keeps a name: see [Opting out](#opting-out-nominify). | rename-vars |
 | `rename-functions` | Functions get the shortest free names too. Not in the `default` preset: error messages and tracebacks then show the short names (the [decode map](#outputs) has the originals). | rename-functions |
+| `rename-tables` | Table keys (fields and methods: `obj.speed`, `M.update`, `{hp=3}`, `t["k"]`) get the shortest free names too, the same new name for a key everywhere, when an analysis of the whole program proves that safe; otherwise none is renamed and the report says why. Not in the `default` preset: error messages then show short field and method names, and its guarantee rests on that analysis. See [Table keys](#table-keys-rename-tables). | rename-tables |
 | `constants` | Constant values are inlined and the constants' declarations removed. With `extra` off, a restricted removal deletes only constants nothing reads any more; with `rename-vars` off, the size check costs names at their real length. | inline |
 | `whitespace` | Extraneous newlines and whitespace removed: one function start per line, packed to 120 columns. **Without it, the source's line breaks are kept**, one space of indent per block level. | layout |
 | `extra` | Every further optimisation, together: constant expressions evaluated, unreachable code removed, functions/variables/modules nothing uses removed, call sugar, API aliasing, repeated strings and numbers shared through locals, `local` merging. | fold, dce, shake, sugar, alias, literals, merge |
@@ -31,18 +33,19 @@ line only offers them as one option.
 Every option except `comments` works on the token stream, so choosing any of
 them removes comments too (`comments` is added automatically).
 
-| `ticpak` | Options | wavynavy code size (2026-10-06) |
+| `ticpak` | Options | wavynavy code bytes (2026-10-06) |
 |---|---|---|
-| no `--minify` | none: passthrough | 170,155 |
-| `--minify=comments` | `comments` | 72,244 |
-| `--minify=constants` | `comments,constants` (line breaks kept) | 61,401 |
-| `--minify=whitespace` | `comments,whitespace` | 59,992 |
-| `--minify=rename-vars,constants,extra` | line breaks kept | 51,146 |
-| `--minify` | the `default` preset: every option but `rename-functions` | 45,240 |
-| `--minify=max` | the `max` preset: every option | 40,488 |
+| no `--minify` | none: passthrough | 190,400 |
+| `--minify=comments` | `comments` | 82,921 |
+| `--minify=constants` | `comments,constants` (line breaks kept) | 69,091 |
+| `--minify=whitespace` | `comments,whitespace` | 68,593 |
+| `--minify=rename-vars,constants,extra` | line breaks kept | 57,517 |
+| `--minify` | the `default` preset: every option but `rename-functions` and `rename-tables` | 50,961 |
+| `--minify=default,rename-functions` | | 45,708 |
+| `--minify=max` | the `max` preset: every option | 44,638 |
 
-Two presets name option sets: `default`, every option but `rename-functions`,
-and `max`, every option. In `ticpak`, no `--minify` means no minification, a
+Two presets name option sets: `default`, every option but `rename-functions`
+and `rename-tables`, and `max`, every option. In `ticpak`, no `--minify` means no minification, a
 bare `--minify` means `default`, and `--minify=OPTION,...` means just those
 (a preset can be one of them: `--minify=max`). `ticpak minify` takes each
 option as a flag (`--rename-vars`) and `max` as `--max`; with none, `default`
@@ -54,15 +57,22 @@ messages: TIC-80 reports `attempt to call a nil value (global 'q')` and
 tracebacks name `function 'q'`, which the decode map turns back into source
 names. What it saves depends on the code. On the 8 ports it took 1.9–12.1% off
 the `default` output: little where functions live in module tables
-(`M.update` is a field, never renamed), most where a game is written as many
-global functions with long names.
+(`M.update` is a field, which only `rename-tables` renames), most where a game
+is written as many global functions with long names.
+
+`rename-tables` is left out of `default` for the same reason, and one more: it
+renames a key only when an analysis of how the program uses strings proves
+that safe, a guarantee the other options get from Lua's semantics alone. On
+the 8 ports it took another 7.1% off (2.3–11.4% each; one port, which reads
+`load`, keeps every key). [Table keys](#table-keys-rename-tables) has the
+details.
 
 ## What `max` does
 
 The passes run in a fixed order: fold, inline, dead-code removal and tree
-shaking, repeated until nothing changes; then call sugar, aliasing, literal
-sharing, merging and tidying; then renaming (variables and functions in one
-pass); then layout. Each pass re-parses the program, so it
+shaking, repeated until nothing changes; then table key renaming; then call
+sugar, aliasing, literal sharing, merging and tidying; then renaming
+(variables and functions in one pass); then layout. Each pass re-parses the program, so it
 always analyses the current code.
 
 | Pass | Effect |
@@ -75,12 +85,61 @@ always analyses the current code.
 | **alias** | A heavily used API or library name (`spr`, `ipairs`, `math.floor`, …) gets a single local alias at the top of the main chunk. Every module is a closure nested inside the main chunk, so one alias covers all of them. This saves characters, and a local read is faster than a global one. It is skipped for any name the program writes, and reverted if a function would exceed Lua's 255-upvalue limit. |
 | **literals** | A string or number written more than once becomes one local at the top of the main chunk, when that saves size: the uses must save more than the declaration costs, so a literal written once is never touched and a short one needs many uses. Literals are grouped by value, so `0x10` and `16` share one local, while `16` and `16.0` (an integer and a float) do not. `f"s"` goes back to `f(a)` when `s` is shared, and that cost counts against the saving. The argument of a literal `require "m"` and the key of `package.preload["m"]` are never shared, as the other passes read them. If a function would exceed Lua's 255-upvalue limit, it shares half as many and tries again. A shared number used in arithmetic is read from a local instead of being a constant operand, a little slower in a hot loop. |
 | **merge** | Merges adjacent `local` statements (`local a=1 local b=2` becomes `local a,b=1,2`) when no initialiser reads an earlier name. |
-| **rename-vars** | Locals (including parameters, loop variables and labels) and non-function globals get one- or two-character names, the most-referenced first. Names are reused where scopes don't overlap. **Not renamed:** function names (unless `rename-functions` is on), table fields and methods, the implicit `self`, every TIC-80/Lua global (see [Reserved names](#reserved-names)), and any variable kept by a `NOMINIFY` directive (below). |
-| **rename-functions** | Function names (`function f`, `local function f`, `local f = function`, a global assigned a function) join the same renaming, so the most-used names get the shortest whatever they are. Still not renamed: methods and functions stored in tables (`function M.update`, `obj:draw`), the TIC-80 callbacks (`TIC`, `BOOT`, …), and a function a `NOMINIFY` directive keeps. Each function still starts its own line, so the decode map's line numbers stay exact. |
+| **rename-tables** | Table keys get the shortest free names, the most-used first, one new name per key name across the whole program. A key literal becomes a field (`t["speed"]` → `t.q`). Kept: library keys (`floor`, `sub`, `insert`, …), metamethods (`__index`, …), `n`, keys also written as a string, and keys a string built at runtime could spell. See [Table keys](#table-keys-rename-tables). |
+| **rename-vars** | Locals (including parameters, loop variables and labels) and non-function globals get one- or two-character names, the most-referenced first. Names are reused where scopes don't overlap. **Not renamed:** function names (unless `rename-functions` is on), table fields and methods (unless `rename-tables` is on), the implicit `self`, every TIC-80/Lua global (see [Reserved names](#reserved-names)), and any variable kept by a `NOMINIFY` directive (below). |
+| **rename-functions** | Function names (`function f`, `local function f`, `local f = function`, a global assigned a function) join the same renaming, so the most-used names get the shortest whatever they are. Still not renamed: methods and functions stored in tables (`function M.update`, `obj:draw`: `rename-tables` renames those), the TIC-80 callbacks (`TIC`, `BOOT`, …), and a function a `NOMINIFY` directive keeps. Each function still starts its own line, so the decode map's line numbers stay exact. |
 | layout | Every function definition starts a new line, at any depth. Otherwise tokens are packed into lines of at most 120 characters, breaking only between tokens. |
 
 Run `ticpak bundle -f --minify -o dist/` and read `dist/<name>.minify.txt` to see
 what each pass did to a given cart.
+
+### Table keys (`rename-tables`)
+
+`rename-tables` renames a key by its spelling: every `.speed`, `:speed()`,
+`{speed = …}` and `["speed"]` in the program becomes the same short name,
+whatever table it is on. Whatever the program does with its own keys still
+lines up: copying keys between tables, `__index` chains, reading keys back
+with `pairs` and using them as keys again.
+
+Two things can still break a renamed key, and the pass looks for both in the
+whole program before renaming anything:
+
+- **A name the platform knows.** The library's keys (`math.floor`,
+  `s:sub()`, `table.insert`, `package.preload`), metamethods (`__index`,
+  `__add`, …) and `table.pack`'s `n` are never renamed, on any table. The
+  TIC-80 API takes and returns no tables with string keys.
+- **A string that meets a key.** A key also written as a string anywhere
+  (`state = "dead"` and `t.dead`) keeps its name. A key built at runtime
+  keeps every name it could spell: `t[string.format("sprite_%02d", i)]` keeps
+  `sprite_01`, `sprite_02`, …; `obj["on_" .. event]` keeps `on_click`;
+  `t[s:sub(i, i)]` keeps the one-letter keys. And a key the runtime hands
+  back (`pairs`, `next`, an `__index` function's argument) may be stored,
+  compared with `==` and used as a key, but not shown.
+
+When the pass can't prove a program safe, it renames no key at all and the
+report says why, with the line:
+
+| The report says | Because |
+|---|---|
+| `a module on its own (fragment mode)` | a module's keys are its interface (`ticpak minify` on a module) |
+| `dynamic access (...)` | the program reads `_G`, `_ENV`, `load`, `rawget`, … |
+| `a table key can be a string built at runtime` | `t[x .. y]`, `t[s:upper()]`: a key built from data the analysis can't pin down |
+| `a table key is passed to print` (or `trace`, `font`, `string.format`, …), `is joined into a string`, `is measured with #`, `is compared by order` | a key from `pairs`/`next` (or an `__index` argument) would show its new spelling |
+| `a table key may be in a list given to table.sort` (or `table.concat`) | the order or text of a list of keys would change |
+| `gsub's replacement may be a table` | `s:gsub(pattern, tbl)` looks keys up by the text it captures |
+| `code kept by NOMINIFY is not analysed` | a protected function or module could use any key |
+
+To find the cause, follow the value back from the line the report names: the
+key usually comes from a `pairs` loop, and the string from `..`,
+`string.format` or a string method. There is no way to keep one key: leave
+`rename-tables` off to keep them all.
+
+Error messages and tracebacks show the new names (`attempt to index a nil
+value (field 'q')`, `in method 'b'`). The [decode map](#outputs) lists each
+renamed key as kind `field`, and a key has the same new name everywhere.
+`pairs` may also visit a table's keys in another order, since the new keys
+hash differently. Lua 5.3 already varies that order from run to run, so code
+that depends on it is fragile anyway.
 
 ### Opting out (NOMINIFY)
 
@@ -211,8 +270,9 @@ such as a title that happens to contain the word, don't count.
 - **Exactly what is kept:** the parameter list and body, from `(` to `end`,
   and the function's name: `rename-functions` leaves `local function name`,
   `function name` and `local name = function` alone (a method or a function
-  in a table keeps its name anyway). The directive comment itself is removed
-  like any other comment, unless it is inside the body.
+  in a table keeps its name too: kept code turns `rename-tables` off). The
+  directive comment itself is removed like any other comment, unless it is
+  inside the body.
 
 Contract: [`minify-spec.md`](minify-spec.md) R8h.
 
@@ -308,12 +368,17 @@ A folder build (`ticpak bundle -o dist/`) with any `--minify=` option past
   - the UPPER_CASE names that are **not** constants, with the reason (for
     example `BANK: value is not a constant scalar (table)`);
   - the globals that are never written;
+  - with `rename-tables`, how many table keys were renamed, or why none was
+    (see [Table keys](#table-keys-rename-tables)), and the keys kept because
+    they are also a string or a built key could spell them;
   - the functions, modules, names and comments kept by `NOMINIFY`.
 - **`dist/<name>.minify.json`**, for decoding an error from the packaged cart:
   - `"lines"` maps each output line to the source file and line of its first
     token (TIC-80 reports `[string "…"]:37:`, so look up `"37"`);
-  - `"renames"` lists every renamed identifier (variables, and with
-    `rename-functions` functions) with its original name and source line.
+  - `"renames"` lists every renamed identifier (variables, with
+    `rename-functions` functions, and with `rename-tables` table keys, kind
+    `field`) with its original name and source line. A key's entry is its
+    first occurrence: a key has the same new name everywhere.
 
 ### What each option saved
 
@@ -333,6 +398,7 @@ add up per file. Stage by stage:
 | `extra` | the rest of that loop (fold, dce, shake), then sugar, alias, literals and merge |
 | `rename-vars` | the token bytes the rename pass removes, less `rename-functions`' |
 | `rename-functions` | the bytes the rename pass takes off function names, counted as it renames them |
+| `rename-tables` | the token bytes the table key pass removes (it runs between the loop and sugar) |
 | `whitespace` | what is left over: whitespace removed from the source, less what the layout puts back |
 
 The optimisation loop runs `inline` together with fold, dce and shake until
@@ -351,7 +417,7 @@ Every line still balances: `before - after` is the sum of its options'
 savings. A module that shake removed has a `total` of 0 in ticpak's table.
 
 What the code is made of splits the output into strings, numbers, keywords,
-operators, table field and method names, TIC-80 and Lua names, names never
+operators, table field and method names (renamed by `rename-tables` or not), TIC-80 and Lua names, names never
 renamed (globals in a fragment or under dynamic access, `NOMINIFY` names,
 `self`), variable names (renamed, or the ones `rename-vars` would shorten),
 function names (renamed, or the ones `rename-functions` would shorten), goto
@@ -371,9 +437,10 @@ ticpak bundle -f --minify           # from the folder holding main.lua
 ```
 
 Standalone, `ticpak minify FILE` writes to stdout. Each option is a flag:
-`--comments`, `--rename-vars`, `--rename-functions`, `--constants`,
-`--whitespace`, `--extra`, and `--max` for every option; with none of them,
-the `default` options apply (every option but `--rename-functions`).
+`--comments`, `--rename-vars`, `--rename-functions`, `--rename-tables`,
+`--constants`, `--whitespace`, `--extra`, and `--max` for every option; with
+none of them, the `default` options apply (every option but
+`--rename-functions` and `--rename-tables`).
 
 ```
 ticpak bundle -f --minify=comments -o dist/   # bundle, comments out (see below)
@@ -396,7 +463,7 @@ As a module (`ticpak` uses `minify_cart_ex`):
 ```python
 from ticpak import minify
 text = minify.minify(src, mode="max")                   # str; "max" = every option
-text = minify.minify(src, mode="default")               # every option but rename-functions
+text = minify.minify(src, mode="default")               # all but rename-functions, rename-tables
 text = minify.minify(src, mode="comments,rename-vars")  # any options
 minify.parse_options("comments,rename-vars")            # -> frozenset({...})
 r = minify.minify_cart_ex(cart_text, mode="max", meta_keys=KEYS)
@@ -429,8 +496,10 @@ The globals the minifier never touches are:
 - `_ENV`, `_G`, `self` and `arg`.
 
 The TIC-80 list is generated by probing the real binary, and it is **embedded**
-in `minify.py` between `# <reserved>` markers. Regenerate it after a TIC-80
-upgrade (this runs one headless boot):
+in `minify.py` between `# <reserved>` markers. The same probe lists the keys
+of the library tables (`string.sub`, `math.pi`, `package.preload`, … 98 in
+1.2.0 Pro), which `rename-tables` never renames. Regenerate both after a
+TIC-80 upgrade (this runs one headless boot):
 
 ```
 python scripts/update_reserved.py            # rewrites the block in ticpak/minify.py
@@ -449,14 +518,14 @@ python tests/minify/difftest.py --all  # every game under $TICPAK_GAMES, origina
 python tests/options/test_options.py   # every option combination
 ```
 
-- **`tests/options/`** runs all 64 subsets of the six options (33 distinct
+- **`tests/options/`** runs all 128 subsets of the seven options (65 distinct
   sets) on sample carts with assets in several layouts. For each, it checks
   structure, that the metadata header and assets come through byte-identical,
   each option's effect on and off, and identical behaviour under Lua 5.3
   against a logging TIC-80 stand-in. It also covers sizes, every NOMINIFY
-  directive (variables, functions, modules, the whole cart, kept comments) and
-  `ticpak.bundle()`. Opt-in, it boots every set's bundle in TIC-80
-  (`TICPAK_BOOT=1`, about 7 minutes). Details:
+  directive (variables, functions, modules, the whole cart, kept comments),
+  `rename-tables` on small programs, and `ticpak.bundle()`. Opt-in, it boots
+  every set's bundle in TIC-80 (`TICPAK_BOOT=1`, about 12 minutes). Details:
   [tests/options/README.md](../tests/options/README.md).
 
 - **`run.py fold`** generates thousands of random constant expressions. Each one
@@ -470,25 +539,31 @@ python tests/options/test_options.py   # every option combination
   function's first and last line, so the proof can't use the 120-column layout.
   Result: identical on all 8 ports, 575 KB of bytecode.
 - **`run.py fixtures`** runs [`tests/minify/fixtures.lua`](../tests/minify/fixtures.lua):
-  19 small programs aimed at the risky transforms (negative literals in every
+  40 small programs aimed at the risky transforms (negative literals in every
   operator position, and/or with multiple values, shadowing, multiple
   assignment, varargs, goto, `repeat` scope, string escapes, modules, indirect
-  `require`). Each runs before and after minification, and the output must
-  match. Add a case with every new rule or bug fix.
+  `require`, and 20 for table keys). Each runs before and after
+  minification with every option, and the output must match. A "table keys"
+  case must also have `rename-tables` renaming, or, if its name ends
+  "(pass off)", turned off: those 11 cases leak a key's spelling in a
+  different way each, and an unsound analysis would fail them. Add a case
+  with every new rule or bug fix.
 - **`difftest.py`** (also on `$TICPAK_GAMES`) bundles a game exactly as `ticpak` does, minifies it with
-  the `max` preset (so `rename-functions` too), and
+  the `max` preset (so `rename-functions` and `rename-tables` too), and
   runs both builds in lockstep under a stub of the TIC-80 API:
   - RAM, map banks and flags come from the cart's chunks, and `sync()` swaps
     banks;
   - button input is scripted, and `time()` runs off a frame clock;
-  - `pairs` iterates in a stable order, and each build has its own
-    `math.random` (5.3's is C `rand()`, one generator shared by every Lua state
-    in the process).
+  - `pairs` iterates in a stable order (sorting a renamed key by its original
+    name, from the decode map), and each build has its own `math.random`
+    (5.3's is C `rand()`, one generator shared by every Lua state in the
+    process).
 
   Every output call (drawing, sound, `poke`, `pmem`, `trace`, …) is logged with
   exact arguments, and the logs must match frame for frame. Use `--seed=N` and
   `--frames=N` to vary the input, and `--coverage` to report the share of code
   lines the original executed. Result: all 8 ports identical over 3,600 frames
   for seeds 1–3, executing 15–50% of each game's code lines per run
-  (2026-10-06, with `rename-functions`: identical over 3,600 frames, seed 1).
+  (2026-10-06, with `rename-functions` and `rename-tables`: identical over
+  3,600 frames, seed 1).
 

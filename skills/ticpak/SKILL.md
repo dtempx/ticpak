@@ -50,9 +50,9 @@ otherwise `check`.
   (no uv? see the README's "Installing uv"). It is one command: checking
   files and minifying are `ticpak check FILE...` and `ticpak minify FILE`
   (stdout; flags `--comments`, `--rename-vars`, `--rename-functions`,
-  `--constants`, `--whitespace`, `--extra`, or `--max` for all; none means
-  every option but `--rename-functions`; a module's globals are left
-  alone).
+  `--rename-tables`, `--constants`, `--whitespace`, `--extra`, or `--max`
+  for all; none means every option but `--rename-functions` and
+  `--rename-tables`; a module's globals and table keys are left alone).
 - **Run from the folder holding `main.lua`** (ticpak also finds
   `src/main.lua`), or pass the cart's path as the first argument.
 - **The metadata header must be complete.** The comment block at the top of

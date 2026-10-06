@@ -2,7 +2,8 @@
 """Differential test for minify max mode: original vs minified, frame by frame.
 
 Bundles a TIC-80 port exactly as ticpak does (no minification), minifies the
-bundle with the `max` preset (every option, rename-functions included), then runs both in two real Lua 5.3 states (lupa)
+bundle with the `max` preset (every option, rename-functions and rename-tables
+included), then runs both in two real Lua 5.3 states (lupa)
 side by side under one deterministic stub of the TIC-80 API: RAM, map and
 sprite flags loaded from the cart's own asset chunks, scripted button input,
 a frame clock for time(), and an order-stable pairs(). Every API call that
@@ -134,11 +135,14 @@ function pix(x, y, c) if c == nil then return 0 end log("pix", x, y, c) end
 function vbank(id) log("vbank", id) return 0 end
 function fft() return 0 end
 function ffts() return 0 end
--- order-stable pairs: two Lua states hash strings with different seeds
+-- order-stable pairs: two Lua states hash strings with different seeds. A
+-- key rename-tables shortened sorts by its original name (__H.orig), so both
+-- builds walk a table in the same order.
 local _next, _type, _sort = next, type, table.sort
 local function keycmp(a, b)
   local ta, tb = _type(a), _type(b)
   if ta ~= tb then return ta < tb end
+  if ta == "string" and __H.orig then a, b = __H.orig[a] or a, __H.orig[b] or b end
   if ta == "number" or ta == "string" then return a < b end
   if ta == "boolean" then return (a and 1 or 0) < (b and 1 or 0) end
   return tostring(a) < tostring(b)
@@ -323,10 +327,13 @@ def run_port(port, frames, seed, passes=None, quiet=False, coverage=False):
         res = minify.minify_ex(code, mode="max", **opts)
     t_min = time.time() - t0
     rts = []
+    fields = {new: old for new, old, kind, _ in res.renames if kind == "field"}
     for src in (code, res.text):
         rt = lua53.LuaRuntime(unpack_returned_tuples=True)
         rt.execute(STUB)
         H = rt.globals().__H
+        if src is res.text and fields:
+            H.orig = rt.table_from(fields)
         install_banks(rt, H, chunks)
         rts.append((rt, H, src))
     game = os.path.basename(os.path.dirname(port))

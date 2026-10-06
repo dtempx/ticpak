@@ -262,8 +262,8 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 |---|---|
 | `SOURCE` | the cart, or a folder searched for `main.lua` then `src/main.lua` (default: the current folder); or [a module on its own](#a-module-on-its-own) |
 | `-f`, `--force` | `bundle` only: build even when the cart is up to date |
-| `-m`, `--minify` | minify with the `default` options: every option but `rename-functions` (see [Minification](#minification)) |
-| `-m=max`, `--minify=max` | minify with every option, `rename-functions` included: the smallest cart |
+| `-m`, `--minify` | minify with the `default` options: every option but `rename-functions` and `rename-tables` (see [Minification](#minification)) |
+| `-m=max`, `--minify=max` | minify with every option, `rename-functions` and `rename-tables` included: the smallest cart |
 | `-m OPTION,...`, `--minify=OPTION,...` | minify with only the listed options (`-m=a,b` and `-ma,b` work too) |
 | *(no `-m`)* | no minification: the inlined source, verbatim |
 | `-o`, `--output PATH` | what to write: `NAME.tic`, `NAME.lua`, or a folder (see [Output](#output)); default `<name>.tic` beside `main.lua` |
@@ -332,9 +332,9 @@ TIC-80 binary is needed. It exits 1 if any file has a violation.
 
 `ticpak minify FILE` minifies one Lua file and writes the result to stdout.
 Each minify option is a flag of its own (`--comments`, `--rename-vars`,
-`--rename-functions`, `--constants`, `--whitespace`, `--extra`); with none of
-them, the `default` options apply (every option but `--rename-functions`), and
-`--max` applies every option.
+`--rename-functions`, `--rename-tables`, `--constants`, `--whitespace`,
+`--extra`); with none of them, the `default` options apply (every option but
+`--rename-functions` and `--rename-tables`), and `--max` applies every option.
 
 ```
 ticpak minify enemies.lua > enemies.min.lua         # one module, the default options
@@ -478,7 +478,8 @@ total                   95,751    44,763      10,323      5,039    826        5,
   the `package.preload` wrapper around each module.
 - **rename-vars** and **rename-functions** run as one pass, so the names
   used most get the shortest, whatever they are. Each column counts what
-  shortening its own names saved.
+  shortening its own names saved. **rename-tables** is a pass of its own: its
+  column is what shortening table keys saved.
 - A module that `extra` removed because nothing uses it ends with
   `(removed: unused)`.
 
@@ -498,18 +499,19 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 ? Cart name (.tic): [mygame]
 ? Minification:
-  1) default  - every option but rename-functions (small, readable errors)  [default]
+  1) default  - every option but rename-functions and rename-tables (small, readable errors)  [default]
   2) comments - remove comments only
-  3) max      - every option, rename-functions too (smallest cart)
+  3) max      - every option, rename-functions and rename-tables too (smallest cart)
   4) none     - no minification (the bundled source verbatim)
   5) choose individual minification options...
 ? Minify options (space toggles, enter accepts):
    1) [x] comments          remove comments (keeps the metadata header and asset blocks)
    2) [x] rename-vars       rename variables to the shortest free names (1-2 letters)
    3) [ ] rename-functions  rename functions to the shortest free names too (error messages then show the short names)
-   4) [x] constants         inline constant values and remove the constants
-   5) [x] whitespace        remove extraneous newlines and whitespace
-   6) [x] extra             further optimisations
+   4) [ ] rename-tables     rename table fields and methods too, where an analysis proves it safe (error messages then show the short names)
+   5) [x] constants         inline constant values and remove the constants
+   6) [x] whitespace        remove extraneous newlines and whitespace
+   7) [x] extra             further optimisations
 ? Output:
   1) output mygame.tic only [default]
   2) output all files to a folder - mygame.tic (binary), mygame.lua (source), etc.
@@ -572,15 +574,17 @@ added after the header's last line, and the file keeps its line endings.
 
 The free TIC-80 editor holds 64K of code, so a large game may need its code
 shrunk. Without `-m` the bundle is not minified. `-m` on its own applies the
-`default` options, every option but `rename-functions`; `-m=max` applies every
-option; `-m=OPTION,...` applies only those (`default` and `max` can be listed
-too: `-m=default,rename-functions` is `-m=max`).
+`default` options, every option but `rename-functions` and `rename-tables`;
+`-m=max` applies every option; `-m=OPTION,...` applies only those (`default`
+and `max` can be listed too: `-m=default,rename-functions,rename-tables` is
+`-m=max`).
 
 | Option | What it does |
 |---|---|
 | `comments` | removes comments (keeps the metadata header and asset sections); nothing else changes |
 | `rename-vars` | renames variables to the shortest free names (1-2 letters) |
-| `rename-functions` | renames functions to the shortest free names too. Not in `default`: error messages then show the short names, so you need the [decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson) to read them. Table fields and methods (`M.update`, `obj:draw`) keep their names either way |
+| `rename-functions` | renames functions to the shortest free names too. Not in `default`: error messages then show the short names, so you need the [decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson) to read them. Table fields and methods (`M.update`, `obj:draw`) are `rename-tables`' |
+| `rename-tables` | renames table keys, fields and methods alike (`obj.speed`, `M.update`, `{hp=3}`), to the shortest free names too: one new name per key, everywhere. Library keys (`math.floor`, `s:sub`), metamethods, keys also written as a string, and keys a string built at runtime could spell keep their names. It renames only when an analysis of the whole program proves that safe; when it can't (say a `pairs` loop prints its keys), no key is renamed and the report says why ([details](docs/minify.md#table-keys-rename-tables)). Not in `default`: error messages then show short field and method names |
 | `constants` | inlines constant values and removes the constants |
 | `whitespace` | removes extraneous whitespace and newlines, packing lines to 120 columns |
 | `extra` | everything else: folds constant expressions (`2*8` → `16`), removes unreachable code and anything nothing uses, call sugar (`f("x")` → `f"x"`), short local aliases for heavily used API functions (`spr`, `math.floor`, ...), shares strings and numbers written several times through one local each (only where that saves space), and merges adjacent `local` statements |
@@ -589,15 +593,18 @@ On one 20-module game (code characters; the free limit is 65,536):
 
 | Minification | Code |
 |---|---|
-| none | 95,748 |
-| `comments` | 47,802 |
-| `comments,whitespace` | 41,004 |
-| `-m` (`default`) | 29,073 |
-| `-m=max` | 27,370 |
+| none | 95,731 |
+| `comments` | 47,773 |
+| `comments,whitespace` | 40,964 |
+| `-m` (`default`) | 29,053 |
+| `-m=default,rename-functions` | 27,346 |
+| `-m=max` (`rename-tables` too) | 24,324 |
 
 How much `rename-functions` adds depends on the code: about 2% for a game
 whose functions live in module tables (`M.update`), and up to 12% for one
-written as many global functions with long names.
+written as many global functions with long names. `rename-tables` took
+another 2.3–11.4% off seven games (7.1% overall); it renamed nothing in an
+eighth, which reads `load`.
 
 With a [folder output](#output), every option past `comments` also writes
 two files you need to decode a runtime error in the packaged cart:
@@ -624,7 +631,7 @@ comment lines in a row; a blank line or code ends the block), or a comment
 | Where the directive is | What is kept |
 |---|---|
 | directly above, or after, a variable's `local`, assignment or `for` | that variable: its name, declaration and value |
-| directly above a function, or after its first or last line | the whole function, byte for byte, and its name (`rename-functions` leaves it alone) |
+| directly above a function, or after its first or last line | the whole function, byte for byte, and its name (`rename-functions` leaves it alone, and `rename-tables` renames no key while kept code is in the cart) |
 | a module's top comment block | the whole module, byte for byte |
 | `main.lua`'s header block (outside the metadata tags) | the whole cart |
 | anywhere else | the comment itself |
@@ -804,7 +811,8 @@ cart size: 134K
 ### The decode maps: `<name>.minify.txt` and `<name>.minify.json`
 
 Past `comments`, minification changes line numbers and renames variables
-(and functions, with `rename-functions`), so an error from the packaged cart
+(and functions, with `rename-functions`, and table keys, with
+`rename-tables`), so an error from the packaged cart
 no longer points at your sources. A folder build (`-o dist/`) writes these two maps beside the bundle
 to translate them back. Say TIC-80 reports:
 
@@ -823,13 +831,16 @@ is decoded the same way. `<name>.minify.json` translates both:
 - `"renames"` lists every renamed identifier, such as
   `{"new": "b", "old": "target", "kind": "local", "source": ["enemies.lua", 98]}`.
   A short name can be reused in different scopes, so pick the entry whose
-  source is near the line you found.
+  source is near the line you found. With `rename-tables`, a key in a
+  message (`(field 'q')`, `in method 'q'`) has an entry of kind `"field"`:
+  a key has the same new name everywhere, so there is only one.
 
 `<name>.minify.txt` is the minifier's report for people: the code size after
 each pass, the bytes each option saved, what the minified code is made of,
 the biggest names that stayed, then every constant inlined, every piece of
 code or variable
-removed, every API function aliased, every literal shared, and everything kept by `NOMINIFY`, each
+removed, every API function aliased, every literal shared, the table keys
+renamed (or why none was), and everything kept by `NOMINIFY`, each
 with its `file:line`. Read it when you want to know what happened to a
 particular name, or attach it when reporting a minifier bug. The file
 formats are described in [docs/minify.md](docs/minify.md#outputs).
@@ -891,7 +902,7 @@ new session, so it reads the new version.
 | `ticpak/minify.py` | the minifier (`ticpak minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
 
 `scripts/update_reserved.py` refreshes the minifier's list of TIC-80 API
-names (which renaming must never take) from a TIC-80 binary.
+names and library keys (which renaming must never take) from a TIC-80 binary.
 
 ## Testing
 
@@ -906,7 +917,7 @@ runs the original and minified code side by side in Lua 5.3, comparing what
 they draw. It also checks that every asset layout (bank 0, banks 1-7, a
 `SCREEN` cover, CRLF line endings) comes through the minifier and the bundle
 byte for byte. Set `TICPAK_BOOT=1` to also boot the bundles in TIC-80 and
-compare the saved `.tic`'s asset chunks with `main.lua`'s sections (about 4
+compare the saved `.tic`'s asset chunks with `main.lua`'s sections (about 12
 minutes). `tests/minify` checks the minifier on fixtures and random
 expressions; set `TICPAK_GAMES` to a folder of `<game>/tic80/` projects to
 also run real games frame by frame against their minified bundles.

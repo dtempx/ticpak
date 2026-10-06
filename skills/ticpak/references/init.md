@@ -168,10 +168,19 @@ available:
   above a call) keeps just itself, for credits or licence lines. A blank
   line ends a comment block, and the word must stand alone (`NOMINIFY_X`
   doesn't count). A kept comment line must not start `-- <`.
-- Table fields, methods and every TIC-80/Lua global are never renamed, so
-  `obj.field` access is always safe. Function names are renamed only by the
-  opt-in `rename-functions` option (`-m=max`), so tracebacks stay readable
-  with a plain `-m`. A `NOMINIFY` comment on a function keeps its name too.
+- Every TIC-80/Lua global is never renamed. Function names are renamed only
+  by the opt-in `rename-functions` option, and table fields and methods only
+  by the opt-in `rename-tables` (both in `-m=max`), so tracebacks stay
+  readable with a plain `-m`. A `NOMINIFY` comment on a function keeps its
+  name too.
+- `rename-tables` gives a key the same new name everywhere and checks the
+  whole program first: it keeps library keys, metamethods, keys also written
+  as strings and keys a built string could spell (`t["sprite_" .. i]`). It
+  renames nothing if a `pairs` loop shows its keys (prints, concatenates,
+  sorts them), if a key is built from data it can't pin down, or if any code
+  is kept by `NOMINIFY`. To let it run, show a label looked up by the key
+  (`LABELS[k]`, with `LABELS = {speed = "Speed"}`) rather than the key
+  itself.
 
 Details: [docs/minify.md](https://github.com/dtempx/ticpak/blob/main/docs/minify.md).
 

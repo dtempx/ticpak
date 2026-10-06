@@ -14,6 +14,8 @@
 --   CONST_*           inlined and removed by `constants`
 --   renameme_*        shortened by `rename-vars`
 --   renamefn_*        functions, shortened by `rename-functions`
+--   renamekey_*       table keys (fields and a method), shortened by `rename-tables`
+--   keepkey_*         a table key also written as a string: never shortened
 --   unused_helper_fn  removed by `extra` (never called)
 --   DEAD_BRANCH       removed by `extra` (if false ... end)
 --   ("sugar_marker")  becomes "sugar_marker" call sugar under `extra`
@@ -28,6 +30,12 @@ renameme_score = 0       -- global state
 renameme_player = {x = 10, y = 20}
 
 local renameme_frames = 0
+
+local renameme_hero = {renamekey_health = 30, ["renamekey_speed"] = 1.5}
+function renameme_hero:renamekey_hurt(n)
+  self.renamekey_health = self.renamekey_health - n
+end
+local renameme_labels = {keepkey_title = "keepkey_title"}
 
 local function renamefn_clamp(v, lo, hi)
   if v < lo then return lo end
@@ -66,6 +74,9 @@ function TIC()
     rect(i * 8, 100, 6, 6, i)
   end
   trace(renameme_frames, renameme_player.x, renameme_score)
+  renameme_hero:renamekey_hurt(1)
+  trace(renameme_hero.renamekey_health, renameme_hero["renamekey_speed"],
+        renameme_labels.keepkey_title)
 end
 
 -- <TILES>

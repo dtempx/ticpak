@@ -14,8 +14,10 @@ bytecode  spec R10c: with only comment removal, layout and local renaming
 fixtures  fixtures.lua: small programs (printing through trace(), a reserved
           TIC-80 name, since whole-program mode renames unknown globals) aimed at the risky transforms (scoping,
           shadowing, multiple assignment, varargs, goto, negative inlining,
-          and/or folding, dead branches with locals, ...). Each is run original
-          and minified; the printed output must be identical.
+          and/or folding, dead branches with locals, table keys, ...). Each is
+          run original and minified (max: every option); the printed output
+          must be identical. A "table keys" case must have rename-tables on,
+          or off when its name says "(pass off)".
 
 The whole-program behaviour check is difftest.py.
 """
@@ -196,7 +198,16 @@ def suite_fixtures():
                   f"    code: {mini[:400]}")
         else:
             shrink = 100 * (1 - len(mini) / max(1, len(src)))
-            print(f"  ok   {name} ({shrink:.0f}% smaller)")
+            rep = res.report
+            keys = (f"; keys kept: {rep.keys_off}" if rep.keys_off else
+                    f"; {rep.keys_renamed} keys renamed" if rep.keys_renamed else "")
+            print(f"  ok   {name} ({shrink:.0f}% smaller{keys})")
+            want_off = name.endswith("(pass off)")
+            if name.startswith("table keys") and (want_off != bool(rep.keys_off)
+                                                  or not (want_off or rep.keys_renamed)):
+                ok = False
+                print(f"  FAIL {name}: rename-tables should "
+                      f"{'be off' if want_off else 'rename keys'} here")
     print(f"fixtures: {'all identical' if ok else 'FAILURES'}")
     return ok
 
