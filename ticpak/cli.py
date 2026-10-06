@@ -42,7 +42,8 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak bundle --verbose          ...showing progress, the check's detail, minify savings
   ticpak check                    check the existing .tic: summary only
   ticpak check --verbose          ...and the full check report
-  ticpak bundle -f -m              every minify option (smallest cart)
+  ticpak bundle -f -m              the default minify options (all but rename-functions)
+  ticpak bundle -f -m=max          every minify option (smallest cart)
   ticpak bundle -f -m=comments,whitespace   just those minify options
   ticpak bundle path/to/main.lua   a cart elsewhere
   ticpak bundle -n mygame          override the output name: mygame.tic
@@ -63,11 +64,12 @@ COMMANDS = ("bundle", "check")       # `minify` is dispatched before argparse
 
 
 def minify_arg(text):
-    """--minify=OPTION,... / -m OPTION,...: option names only (no presets).
-    argparse hands `-m=a,b` over as "=a,b", so a leading = is dropped."""
+    """--minify=OPTION,... / -m OPTION,...: option names, or a preset
+    (default, max). argparse hands `-m=a,b` over as "=a,b", so a leading =
+    is dropped."""
     text = text[1:] if text.startswith("=") else text
     items = [i.strip() for i in text.split(",") if i.strip()]
-    bad = [i for i in items if i not in minifier.OPTIONS]
+    bad = [i for i in items if i not in minifier.OPTIONS and i not in minifier.PRESETS]
     if bad and (os.path.sep in text or "/" in text or text.endswith(".lua")
                 or os.path.exists(text)):
         raise argparse.ArgumentTypeError(
@@ -76,8 +78,9 @@ def minify_arg(text):
     if bad or not items:
         raise argparse.ArgumentTypeError(
             f"unknown minify option {', '.join(map(repr, bad)) or repr(text)}"
-            f" (expected one or more of {', '.join(minifier.OPTIONS)};"
-            " --minify alone means all of them)")
+            f" (expected one or more of {', '.join(minifier.OPTIONS)}, or default"
+            " or max; --minify alone means default: every option but"
+            " rename-functions)")
     return minifier.parse_options(items)
 
 
@@ -96,21 +99,24 @@ def report_arg(text):
 
 
 def ask_minify(ui, minify):
-    """Minification: all options, comments only, none, or the individual
-    options as checkboxes. minify is the default; returns the chosen options."""
-    presets = {"all": minifier.ALL_OPTIONS,
+    """Minification: the default options, comments only, max (every
+    option), none, or the individual options as checkboxes. minify is the
+    default; returns the chosen options."""
+    presets = {"default": minifier.DEFAULT_OPTIONS,
                "comments": minifier.parse_options(["comments"]),
+               "max": minifier.ALL_OPTIONS,
                "none": frozenset()}
     current = next((k for k, v in presets.items() if v == minify), "pick")
     choice = ui.select("Minification:", [
-        ("all", "all      - all minification options (smallest cart)"),
+        ("default", "default  - every option but rename-functions (small, readable errors)"),
         ("comments", "comments - remove comments only"),
+        ("max", "max      - every option, rename-functions too (smallest cart)"),
         ("none", "none     - no minification (the bundled source verbatim)"),
         ("pick", "choose individual minification options..."),
     ], default=current)
     if choice == "pick":
         picked = ui.checkbox("Minify options (space toggles, enter accepts):",
-                             [(o, f"{o:<11} {minifier.OPTION_HELP[o]}")
+                             [(o, f"{o:<16} {minifier.OPTION_HELP[o]}")
                               for o in minifier.OPTIONS], checked=minify)
         return minifier.parse_options(picked)
     return presets[choice]
@@ -235,11 +241,12 @@ def parse_args(argv):
                          " header's saveid, else its title); not with -o FILE,"
                          " which names the file itself")
     ap.add_argument("-m", "--minify", metavar="OPTION,...", type=minify_arg, nargs="?",
-                    const=minifier.ALL_OPTIONS, default=None,
-                    help="minify the bundle: --minify alone applies every"
-                         " option; --minify=OPTION,... only those ("
-                         + ", ".join(minifier.OPTIONS) + "; see the documentation"
-                         " below)."
+                    const=minifier.DEFAULT_OPTIONS, default=None,
+                    help="minify the bundle: --minify alone applies the default"
+                         " options (every option but rename-functions);"
+                         " --minify=max every option; --minify=OPTION,... only"
+                         " those (" + ", ".join(minifier.OPTIONS) + "; see the"
+                         " documentation below)."
                          " Without it the bundle is not minified")
     ap.add_argument("--verbose", action="store_true",
                     help="show progress, the check's detail and what minification"
@@ -272,9 +279,9 @@ def parse_args(argv):
                  " or give -o a folder")
     args.source = args.sources[0] if args.sources and not args.files else None
     # Without -m, build and check don't minify; the interactive question
-    # offers every option as its default.
+    # offers the default options as its default.
     if args.minify is None:
-        args.minify = frozenset() if command else minifier.ALL_OPTIONS
+        args.minify = frozenset() if command else minifier.DEFAULT_OPTIONS
     return command, args, ap
 
 
@@ -297,7 +304,8 @@ def minify_command(argv):
     module, leaving its globals alone."""
     ap = argparse.ArgumentParser(
         prog="ticpak minify", usage="%(prog)s [options] FILE.lua    (writes to stdout)",
-        description="Minify one Lua file; with no option given, every option applies.\n\n"
+        description="Minify one Lua file; with no option given, the default options\n"
+                    "apply (every option but --rename-functions; --max adds it).\n\n"
                     "A cart (main.lua, or a file with a metadata header or asset\n"
                     "sections) keeps its header and asset sections. A cart that\n"
                     "requires no modules is the whole program, so anything it doesn't\n"
@@ -313,10 +321,12 @@ def minify_command(argv):
         ap.add_argument("--" + o, dest="options", action="append_const", const=o,
                         help="further optimisations (listed below)" if o == "extra"
                         else minifier.OPTION_HELP[o])
+    ap.add_argument("--max", dest="options", action="append_const", const="max",
+                    help="every option, rename-functions included")
     args = ap.parse_args(argv)
     if not os.path.isfile(args.file):
         sys.exit(f"minify: {args.file} not found")
-    options = minifier.parse_options(args.options or minifier.OPTIONS)
+    options = minifier.parse_options(args.options or minifier.DEFAULT_OPTIONS)
     src = open(args.file, encoding="utf-8").read()
     cart = is_cart(args.file)
     header, code, chunks = minifier.split_cart(src, META_KEYS)

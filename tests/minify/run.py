@@ -9,8 +9,8 @@ fold      constant evaluator vs real Lua 5.3: random constant expressions are
           match exactly (type, integer/float subtype, bytes), and the literal it
           would emit must read back as the same value.
 bytecode  spec R10c: with only comment removal, layout and local renaming
-          (fragment mode, passes=rename), every port's bundle compiles to the
-          same stripped bytecode before and after.
+          (fragment mode, the rename-vars pass), every port's bundle compiles
+          to the same stripped bytecode before and after.
 fixtures  fixtures.lua: small programs (printing through trace(), a reserved
           TIC-80 name, since whole-program mode renames unknown globals) aimed at the risky transforms (scoping,
           shadowing, multiple assignment, varargs, goto, negative inlining,

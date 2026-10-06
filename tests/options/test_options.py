@@ -5,15 +5,16 @@
     python tests/options/test_options.py -k Behaviour
     TICPAK_BOOT=1 python tests/options/test_options.py -k Boot
 
-The five options (comments, rename, constants, whitespace, extra) give 32
-subsets; since every option but `comments` implies it, they collapse to 17
-distinct effective sets, and each runs on each cart in samples/ (built by
-make_samples.py) and on the ticpak project in project/. Per combination:
+The six options (comments, rename-vars, rename-functions, constants,
+whitespace, extra) give 64 subsets; since every option but `comments` implies
+it, they collapse to 33 distinct effective sets, and each runs on each cart in
+samples/ (built by make_samples.py) and on the ticpak project in project/.
+Per combination:
 
-  OptionParsing  empty set, `max` alias, unknown names rejected, implied
-                 `comments`, raw subset == its effective set
-  CommandLine        --minify absent = none, bare = all, =a,b = those only;
-                 preset names rejected; a path after --minify hinted;
+  OptionParsing  empty set, the `default` and `max` presets, unknown names
+                 rejected, implied `comments`, raw subset == its effective set
+  CommandLine    --minify absent = none, bare = default, =max, =a,b = those
+                 only; other names rejected; a path after --minify hinted;
                  -m, -o/--output (and --out), -f/--force, --verbose, -v/--version;
                  `check -f` and -n with -o FILE rejected; -q; -r [PATH]
   Outputs        -o NAME.tic / NAME.lua / folder and the default <name>.tic
@@ -27,7 +28,8 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  deterministic; a pass report exactly when an option past
                  `comments` is on
   OptionEffects  each option's visible signature, on and off: comments gone,
-                 renameme_* shortened, CONST_* inlined and removed, lines
+                 renameme_* and renamefn_* shortened, CONST_* inlined and
+                 removed, lines
                  packed to 120 columns, unused/dead code and call sugar
   Behaviour      the original and the minified cart run under real Lua 5.3
                  (lupa) against a logging stand-in TIC-80 API (harness.lua);
@@ -44,7 +46,8 @@ make_samples.py) and on the ticpak project in project/. Per combination:
                  nested and unused functions, a block in a body keeping only
                  itself, a module's top block, module level winning, a blank
                  line ending a block, the whole cart; bodies byte for byte
-                 under every option set, used names pinned
+                 and the functions' names kept under every option set, used
+                 names pinned
   NominifyComments  comments a directive keeps (R8i): where they may sit,
                  moved out of a call, removed with unused code, `-- <` stops
   Bundle         the project bundled by bundle.bundle() for every set behaves
@@ -238,20 +241,23 @@ def tic_assets(path):
 
 
 class TestOptionParsing(unittest.TestCase):
-    def test_empty_and_max(self):
+    def test_empty_and_presets(self):
         self.assertEqual(M.parse_options(""), frozenset())
         self.assertEqual(M.parse_options([]), frozenset())
         self.assertEqual(M.ALL_OPTIONS, set(OPTIONS))
-        self.assertEqual(M.parse_options("max"), M.ALL_OPTIONS)   # API alias
+        self.assertEqual(M.parse_options("max"), M.ALL_OPTIONS)
+        self.assertEqual(M.parse_options("default"), M.ALL_OPTIONS - {"rename-functions"})
+        self.assertEqual(M.parse_options("default"), M.DEFAULT_OPTIONS)
+        self.assertEqual(M.parse_options("default,rename-functions"), M.ALL_OPTIONS)
 
     def test_spelling(self):
-        self.assertEqual(M.parse_options(" rename , whitespace "),
-                         {"comments", "rename", "whitespace"})
+        self.assertEqual(M.parse_options(" rename-vars , whitespace "),
+                         {"comments", "rename-vars", "whitespace"})
         self.assertEqual(M.parse_options(["constants"]), {"comments", "constants"})
 
     def test_unknown_rejected(self):
-        for bad in ("bogus", "dead", "fold", "comments,unused", "Rename",
-                    "default", "all", "none"):
+        for bad in ("bogus", "dead", "fold", "comments,unused", "Rename-vars",
+                    "rename", "all", "none", "rename_vars"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 M.parse_options(bad)
 
@@ -268,15 +274,15 @@ class TestOptionParsing(unittest.TestCase):
                     raw = M.minify_cart_ex(SAMPLES[name], mode=s, meta_keys=META_KEYS)
                     self.assertEqual(raw.text, minified(name, M.parse_options(s)).text)
 
-    def test_seventeen_effective_sets(self):
-        self.assertEqual(len(SUBSETS), 32)
-        self.assertEqual(len(EFFECTIVE), 17)
+    def test_thirty_three_effective_sets(self):
+        self.assertEqual(len(SUBSETS), 64)
+        self.assertEqual(len(EFFECTIVE), 33)
 
 
 class TestCommandLine(unittest.TestCase):
-    """ticpak's command line: --minify absent = none (all, as the interactive
-    question's default), bare = all, =a,b = those only; -f/--force, --verbose
-    and -v/--version."""
+    """ticpak's command line: --minify absent = none (default, as the
+    interactive question's default), bare = default, =max every option, =a,b
+    = those only; -f/--force, --verbose and -v/--version."""
 
     def parse(self, *argv):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -287,30 +293,42 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, frozenset())
 
-    def test_interactive_default_is_all(self):
-        """No command: the interactive question offers every option first."""
-        self.assertEqual(self.parse()[1].minify, M.ALL_OPTIONS)
+    def test_interactive_default_is_default(self):
+        """No command: the interactive question offers the default options
+        first."""
+        self.assertEqual(self.parse()[1].minify, M.DEFAULT_OPTIONS)
 
-    def test_bare_is_all(self):
+    def test_bare_is_default(self):
+        """A bare --minify: every option but rename-functions."""
         for argv in (["--minify"], ["bundle", "-f", "--minify"],
                      ["bundle", "src/main.lua", "--minify"],
                      ["bundle", "-m"], ["bundle", "-m", "-f"]):
             with self.subTest(argv=argv):
-                self.assertEqual(self.parse(*argv)[1].minify, M.ALL_OPTIONS)
+                self.assertEqual(self.parse(*argv)[1].minify, M.DEFAULT_OPTIONS)
+        self.assertNotIn("rename-functions", M.DEFAULT_OPTIONS)
+
+    def test_presets(self):
+        for argv, want in ((["-m=max"], M.ALL_OPTIONS), (["--minify=max"], M.ALL_OPTIONS),
+                           (["-m", "max"], M.ALL_OPTIONS),
+                           (["-m=default"], M.DEFAULT_OPTIONS),
+                           (["-m=default,rename-functions"], M.ALL_OPTIONS)):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.parse(*argv)[1].minify, want)
 
     def test_listed_options(self):
-        for argv, want in ((["--minify=rename,extra"], {"comments", "rename", "extra"}),
-                           (["-m", "rename,extra"], {"comments", "rename", "extra"}),
-                           (["-m=rename"], {"comments", "rename"}),
-                           (["-mrename"], {"comments", "rename"}),
+        for argv, want in ((["--minify=rename-vars,extra"],
+                            {"comments", "rename-vars", "extra"}),
+                           (["-m", "rename-vars,extra"], {"comments", "rename-vars", "extra"}),
+                           (["-m=rename-vars"], {"comments", "rename-vars"}),
+                           (["-mrename-functions"], {"comments", "rename-functions"}),
                            (["--minify", "whitespace"], {"comments", "whitespace"}),
                            (["--minify=comments"], {"comments"})):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, want)
 
     def test_rejected(self):
-        for argv in (["--minify=all"], ["--minify=default"], ["--minify=none"],
-                     ["--minify=max"], ["--minify=rename,bogus"], ["--minify="],
+        for argv in (["--minify=all"], ["--minify=none"], ["--minify=rename"],
+                     ["--minify=rename-vars,bogus"], ["--minify="],
                      ["--minify", "src/main.lua"]):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.parse(*argv)
@@ -383,7 +401,8 @@ class TestCommandLine(unittest.TestCase):
 
 
 class TestMinifyCommand(unittest.TestCase):
-    """`ticpak minify FILE`: one flag per option (none = all of them); a cart
+    """`ticpak minify FILE`: one flag per option (none = the default
+    options, --max = every option); a cart
     that requires no modules is the whole program, anything else a module
     whose globals stay."""
 
@@ -441,6 +460,18 @@ class TestMinifyCommand(unittest.TestCase):
         self.assertNotIn("--", out)
         out = self.run_cmd("--comments", "--whitespace", path)
         self.assertIn('print("hi",1,2)', out)
+
+    def test_functions_renamed_only_on_request(self):
+        """No flag: the default options, which keep function names; --max
+        and --rename-functions rename them."""
+        path = self.write("game.lua", self.HEADER + "function renamefn_hud() print(1) end\n"
+                          "function TIC() renamefn_hud() end\n")
+        self.assertIn("renamefn_hud", self.run_cmd(path))
+        for flags in (["--max"], ["--rename-functions"], ["--rename-vars", "--rename-functions"]):
+            with self.subTest(flags=flags):
+                out = self.run_cmd(*flags, path)
+                self.assertNotIn("renamefn_hud", out)
+                self.assertIn("function TIC()", out)
 
     def test_old_flags_rejected(self):
         path = self.write("title.lua", self.MODULE)
@@ -568,16 +599,32 @@ class TestOutputs(unittest.TestCase):
             return self._next(message, default)
 
         def select(self, message, choices, default):
+            self.choices = [key for key, _ in choices]
             return self._next(message, default)
 
         def checkbox(self, message, choices, checked):
             return self._next(message, checked)
 
     def test_interactive_tic_default(self):
-        ui = self.UI(None, "all", None)
+        ui = self.UI(None, "default", None)
         self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", None),
-                         (M.ALL_OPTIONS, "game", None))
+                         (M.DEFAULT_OPTIONS, "game", None))
         self.assertEqual(ui.asked[-1], "Output:")
+
+    def test_interactive_minify_menu(self):
+        """default, comments, max, none, then the checkboxes; the default
+        options preselected."""
+        for answer, want in (("default", M.DEFAULT_OPTIONS), ("max", M.ALL_OPTIONS),
+                             ("comments", frozenset({"comments"})), ("none", frozenset())):
+            with self.subTest(answer=answer):
+                ui = self.UI(answer)
+                self.assertEqual(cli.ask_minify(ui, M.DEFAULT_OPTIONS), want)
+                self.assertEqual(ui.choices, ["default", "comments", "max", "none", "pick"])
+        ui = self.UI(None)                              # the default answer
+        self.assertEqual(cli.ask_minify(ui, M.DEFAULT_OPTIONS), M.DEFAULT_OPTIONS)
+        ui = self.UI("pick", ["rename-functions"])
+        self.assertEqual(cli.ask_minify(ui, M.DEFAULT_OPTIONS),
+                         {"comments", "rename-functions"})
 
     def test_interactive_folder(self):
         ui = self.UI("Other Name", "none", "dir", None)
@@ -587,14 +634,16 @@ class TestOutputs(unittest.TestCase):
         self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", "out")[2], "x.lua/")
 
     def test_interactive_file_out_asks_minify_only(self):
-        ui = self.UI("all")
+        ui = self.UI("max")
         self.assertEqual(cli.ask_build_settings(ui, frozenset(), "game", "a.tic"),
                          (M.ALL_OPTIONS, "game", "a.tic"))
         self.assertEqual(ui.asked, ["Minification:"])
 
     def test_build_command(self):
-        self.assertEqual(cli.build_command(None, M.ALL_OPTIONS, "g", "g", None),
+        self.assertEqual(cli.build_command(None, M.DEFAULT_OPTIONS, "g", "g", None),
                          "ticpak bundle -m")
+        self.assertEqual(cli.build_command(None, M.ALL_OPTIONS, "g", "g", None),
+                         "ticpak bundle -m=max")
         self.assertEqual(cli.build_command(None, frozenset(), "h", "g", "dist/"),
                          "ticpak bundle -n h -o dist/")
         self.assertEqual(cli.build_command("src", frozenset(), "a", "g", "a.tic"),
@@ -772,7 +821,7 @@ class TestOptionEffects(unittest.TestCase):
             with self.subTest(sample=name, opts=label(opts)):
                 out = code_of(minified(name, opts).text)
                 left = names(r"\brenameme_\w+", out)
-                if "rename" in opts:
+                if "rename-vars" in opts:
                     self.assertFalse(left, "not renamed")
                 elif opts & {"constants", "extra"}:
                     # a renameme_ that is a constant or unused may be removed
@@ -781,6 +830,25 @@ class TestOptionEffects(unittest.TestCase):
                     self.assertEqual(left, marked)
                 self.assertEqual(names(r"\bkeepme_\w+", out), kept, "NOMINIFY name lost")
 
+    def test_rename_functions(self):
+        """renamefn_* functions: renamed by rename-functions only, whatever
+        else is on; keepfn_* (NOMINIFY) never."""
+        seen = False
+        for name, opts in combos():
+            src = code_of(SAMPLES[name])
+            marked = names(r"\brenamefn_\w+", src)
+            kept = names(r"\bkeepfn_\w+", src)
+            seen |= bool(marked)
+            with self.subTest(sample=name, opts=label(opts)):
+                out = code_of(minified(name, opts).text)
+                left = names(r"\brenamefn_\w+", out)
+                if "rename-functions" in opts:
+                    self.assertFalse(left, "not renamed")
+                else:
+                    self.assertEqual(left, marked)
+                self.assertEqual(names(r"\bkeepfn_\w+", out), kept, "NOMINIFY function lost")
+        self.assertTrue(seen)
+
     def test_constants(self):
         for name, opts in combos():
             consts = names(r"\bCONST_\w+", code_of(SAMPLES[name]))
@@ -788,8 +856,8 @@ class TestOptionEffects(unittest.TestCase):
                 out = names(r"\bCONST_\w+", code_of(minified(name, opts).text))
                 if "constants" in opts:
                     self.assertFalse(out, "constants left in place")
-                elif not opts & {"extra", "rename"}:
-                    # (extra's folding may drop them too; rename shortens them)
+                elif not opts & {"extra", "rename-vars"}:
+                    # (extra's folding may drop them too; rename-vars shortens them)
                     self.assertEqual(out, consts)
 
     def test_extra(self):
@@ -803,6 +871,8 @@ class TestOptionEffects(unittest.TestCase):
                         continue
                     if "extra" in opts:
                         self.assertNotIn(mk, out)
+                    elif mk == "unused_helper_fn" and "rename-functions" in opts:
+                        self.assertNotIn(mk, out)       # kept, under a short name
                     else:
                         self.assertIn(mk, out)
 
@@ -887,7 +957,7 @@ class TestNominify(unittest.TestCase):
         self.assertEqual(M.directives(code).comments, [])
 
     def test_kept_names_reported(self):
-        for opts in (M.parse_options("rename"), M.ALL_OPTIONS):
+        for opts in (M.parse_options("rename-vars"), M.ALL_OPTIONS):
             with self.subTest(opts=label(opts)):
                 r = minified("nominify", opts)
                 self.assertEqual({n for n, _ in r.report.nominify}, self.KEPT)
@@ -1029,7 +1099,7 @@ class TestNominifyComments(unittest.TestCase):
                     else:
                         self.assertIn(text, out)
                 self.assertNotIn("GONE_", out)
-                if "rename" in opts:
+                if "rename-vars" in opts:
                     self.assertNotRegex(out, r"\brenameme_")
                 r = minified("nominify_comments", opts)
                 if r.report is not None:
@@ -1038,7 +1108,7 @@ class TestNominifyComments(unittest.TestCase):
     def test_moved_out_of_call(self):
         """KEPT_6 sits between a call's arguments: it goes after the call,
         at the end of that line."""
-        for opts in (M.parse_options("rename"), M.ALL_OPTIONS):
+        for opts in (M.parse_options("rename-vars"), M.ALL_OPTIONS):
             with self.subTest(opts=label(opts)):
                 out = code_of(minified("nominify_comments", opts).text)
                 self.assertRegex(out, r"2\) -- NOMINIFY KEPT_6")
@@ -1046,7 +1116,7 @@ class TestNominifyComments(unittest.TestCase):
     def test_tag_line_stops(self):
         """A kept comment line starting `-- <` would cut the code in TIC-80."""
         src = "local a = 1\n-- NOMINIFY\n-- <MAP> notes\n\ntrace(a)\n"
-        for opts in ("comments", "comments,rename"):
+        for opts in ("comments", "comments,rename-vars", "comments,rename-functions"):
             with self.subTest(opts=opts):
                 with self.assertRaises(M.NominifyError) as e:
                     M.minify_ex(src, opts)
@@ -1091,7 +1161,7 @@ class TestSavings(unittest.TestCase):
         for name, opts in combos():
             with self.subTest(sample=name, opts=label(opts)):
                 tot = self.measured(name, opts).savings.total()
-                for o in ("constants", "extra", "rename"):
+                for o in ("constants", "extra", "rename-vars", "rename-functions"):
                     if o not in opts:
                         self.assertFalse(tot.get(o), o)
                 if not opts:
@@ -1114,8 +1184,20 @@ class TestSavings(unittest.TestCase):
         tot = self.measured("markers", M.ALL_OPTIONS).savings.total()
         for o in ("comments", "whitespace", "constants", "extra"):
             self.assertGreater(tot.get(o, 0), 0, o)
-        for o in ("constants", "rename"):
+        for o in ("constants", "rename-vars"):
             alone = self.measured("markers", M.parse_options(o)).savings.total()
+            self.assertGreater(alone[o], 0, o)
+
+    def test_variables_and_functions_split(self):
+        """basic has variables and functions to rename: one rename pass does
+        both, and each option gets its own share, alone or together."""
+        for opts in (M.ALL_OPTIONS, M.parse_options("rename-vars,rename-functions")):
+            tot = self.measured("basic", opts).savings.total()
+            for o in ("rename-vars", "rename-functions"):
+                with self.subTest(opts=label(opts), option=o):
+                    self.assertGreater(tot.get(o, 0), 0)
+        for o in ("rename-vars", "rename-functions"):
+            alone = self.measured("basic", M.parse_options(o)).savings.total()
             self.assertGreater(alone[o], 0, o)
 
     def test_in_report(self):
@@ -1140,7 +1222,8 @@ class TestSavings(unittest.TestCase):
                                  .encode("utf-8")))
             table = report.savings_table(groups, options)
             self.assertRegex(table[1], r"^file +source +comments +whitespace +constants"
-                                       r" +extra +rename +total +reduction$")
+                                       r" +extra +rename-vars +rename-functions +total"
+                                       r" +reduction$")
             self.assertRegex(table[-2], rf"^total +{raw:,} .* \d+%$")
             self.assertEqual(table[-1], "")         # a blank line ends it
             self.assertEqual([r.split()[0] for r in table[2:-1]],
@@ -1166,7 +1249,7 @@ class TestSavings(unittest.TestCase):
         self.assertTrue(table[3].endswith("(removed: unused)"))
         self.assertFalse(table[2].endswith("(removed: unused)"))
         self.assertRegex(table[3], r" 100%  \(removed: unused\)$")
-        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +1,024 +67%$")
+        self.assertRegex(table[4], r"^total +3,072 +1,024 +0 +0 +1,024 +0 +0 +1,024 +67%$")
 
 
 class TestBundle(unittest.TestCase):
@@ -1205,15 +1288,16 @@ class TestBundle(unittest.TestCase):
             with self.subTest(opts=label(opts)):
                 self.assertIn("keepme_frame", code)                 # NOMINIFY
                 self.assertIn("{12,9,6}", code.replace(" ", ""))    # a table: never inlined
-                self.assertEqual("rename" in opts, "CONST_COLORS" not in code)
-                self.assertEqual("rename" in opts, "renameme_ball" not in code)
+                self.assertEqual("rename-vars" in opts, "CONST_COLORS" not in code)
+                self.assertEqual("rename-vars" in opts, "renameme_ball" not in code)
+                self.assertEqual("rename-functions" in opts, "renamefn_land" not in code)
                 if "constants" in opts:
                     # inlined at its reads, and its declaration gone from the module
                     module = re.search(r'preload\["constants"\]=function\(\.\.\.\)(.*?)\bend\b',
                                        code, re.S).group(1)
                     self.assertNotIn("CONST_FLOOR", code)
                     self.assertNotIn("120", module)
-                elif not opts & {"rename", "extra"}:
+                elif not opts & {"rename-vars", "extra"}:
                     self.assertIn("CONST_FLOOR", code)
                 if opts:
                     self.assertEqual(M.strip_comments(code), code)
@@ -1230,9 +1314,23 @@ class TestBundle(unittest.TestCase):
 
     def test_minify_label(self):
         self.assertEqual(bundle.minify_label(frozenset()), "none")
-        self.assertEqual(bundle.minify_label(M.ALL_OPTIONS), "all")
-        self.assertEqual(bundle.minify_label(M.parse_options("whitespace,rename")),
-                         "comments, rename, whitespace")
+        self.assertEqual(bundle.minify_label(M.DEFAULT_OPTIONS), "default")
+        self.assertEqual(bundle.minify_label(M.ALL_OPTIONS), "max")
+        self.assertEqual(bundle.minify_label(M.parse_options("whitespace,rename-vars")),
+                         "comments, rename-vars, whitespace")
+
+    def test_minify_flag_round_trip(self):
+        """The -m flag a build's `-- ticpak:` line records reads back as the
+        same options; an older build's `rename` reads as rename-vars."""
+        for opts, flag in ((frozenset(), ""), (M.DEFAULT_OPTIONS, "-m"),
+                           (M.ALL_OPTIONS, "-m=max"),
+                           (M.parse_options("rename-functions"), "-m=comments,rename-functions")):
+            with self.subTest(flag=flag):
+                self.assertEqual(bundle.minify_flag(opts), flag)
+                self.assertEqual(bundle.flag_options(flag), opts)
+        self.assertEqual(bundle.flag_options("-m=comments,rename,whitespace"),
+                         {"comments", "rename-vars", "whitespace"})
+        self.assertEqual(bundle.flag_options("-m=comments,bogus"), {"comments"})
 
     @NEEDS_LUA
     def test_same_behaviour(self):

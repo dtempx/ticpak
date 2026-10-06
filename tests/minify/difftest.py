@@ -2,7 +2,7 @@
 """Differential test for minify max mode: original vs minified, frame by frame.
 
 Bundles a TIC-80 port exactly as ticpak does (no minification), minifies the
-bundle with minify max mode, then runs both in two real Lua 5.3 states (lupa)
+bundle with the `max` preset (every option, rename-functions included), then runs both in two real Lua 5.3 states (lupa)
 side by side under one deterministic stub of the TIC-80 API: RAM, map and
 sprite flags loaded from the cart's own asset chunks, scripted button input,
 a frame clock for time(), and an order-stable pairs(). Every API call that

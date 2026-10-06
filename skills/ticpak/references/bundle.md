@@ -55,12 +55,15 @@ can't be a `.tic`.
    | *(none)* | the source inlined verbatim; fails if a module has a column-0 `-- <` comment |
    | `-m=comments` | comments removed, line structure kept: a readable cart and a safe default |
    | `-m=comments,whitespace` | lines packed to 120 columns |
-   | `-m` | every option (`comments,rename,constants,whitespace,extra`): the smallest cart |
+   | `-m` | the `default` preset, every option but `rename-functions` (`comments,rename-vars,constants,whitespace,extra`): small, and error messages still name functions |
+   | `-m=max` | every option, `rename-functions` too: the smallest cart, but error messages show short function names (decode them as below) |
 
-   On a 21-module game these gave 154K, 66K, 55K and 42K characters of code.
-   Go further than `comments` only if the user wants the code under the free
-   editor's 64K, or as small as possible. Code past 64K is fine on Pro, and
-   every player loads it.
+   On a 20-module game these gave 96K, 48K, 41K, 29K and 27K characters of
+   code. Go further than `comments` only if the user wants the code under the
+   free editor's 64K, or as small as possible. Code past 64K is fine on Pro,
+   and every player loads it. Choose `-m=max` only when `-m` isn't small
+   enough: it saves 2–12% more, most on code written as many global
+   functions.
 3. **Report the summary.** It is the last lines of the output (and of the
    report file, for a folder build or with `-r`):
 
@@ -71,7 +74,7 @@ can't be a `.tic`.
    code: 41K (37%)
    assets: 69K (63%)
    code limit: 41K / 64K (64% used, 36% free)
-   original code size: 151K (73% reduction with minify: all)
+   original code size: 151K (73% reduction with minify: default)
    ```
 
    Exit status 1 means a limit or header violation, printed above the
@@ -84,16 +87,17 @@ can't be a `.tic`.
 
    ```
    minify: bytes saved, by file and option (negative: the option added bytes)
-   file                    source  comments  whitespace  constants  extra  rename   total  reduction
-   board.lua               12,241     6,357       1,206        478    141     375   3,684        70%
+   file                    source  comments  whitespace  constants  extra  rename-vars   total  reduction
+   helpers.lua              1,847     1,212         126         15     58          127     309        83%
    ...
-   total                   95,731    44,763      10,326      5,039    866   5,607  29,130        70%
+   total                   95,751    44,763      10,323      5,039    826        5,727  29,073        70%
    ```
 
    Point to the biggest `total` files (bytes after minifying), and to any
-   with a low `reduction`. What the code is made of follows,
-   then the biggest names never renamed: function names and globals, which
-   you can shorten by hand. A negative entry is normal. An inlined constant's
+   with a low `reduction`. What the code is made of follows (its `function
+   names rename-functions would shorten` line is what `-m=max` would save on
+   names), then the biggest names never renamed, such as globals, which you
+   can shorten by hand. A negative entry is normal. An inlined constant's
    bytes move to the file that reads it, and the `(added by ticpak)` row
    holds the aliases and shared literals `extra` declares. `(removed: unused)` marks a module
    that nothing uses.
@@ -141,7 +145,8 @@ ticpak added to the cart (none on carts built before 0.3.4).
 - **Built with any option past `comments`:** look up `"37"` under `"lines"` in
   `dist/<name>.minify.json`. It gives `[file, line]` in your sources. The
   file's `"renames"` list maps a short name in the message (`attempt to call
-  a nil value (global 'q')`) back to the original name.
+  a nil value (global 'q')`, or with `-m=max` a traceback's `in function
+  'q'`) back to the original name.
   `dist/<name>.minify.txt` gives the bytes each option saved, then lists
   what each pass removed, inlined or renamed.
 - **Built with no `-m` or `-m=comments`:** open `dist/<name>.lua` at line 37.

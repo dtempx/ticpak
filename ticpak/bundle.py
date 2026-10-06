@@ -242,32 +242,44 @@ def unminified_size(t):
     return size + (len(f"-- ticpak: {' '.join(stamp)}".rstrip()) + 1 if stamp else 0)
 
 
+def preset_name(options):
+    """'default' or 'max' when options are exactly that preset, else None."""
+    return next((k for k, v in minifier.PRESETS.items() if v == options), None)
+
+
 def minify_label(options):
-    """'comments, rename, ...' in OPTIONS order, 'all', or 'none'."""
+    """'comments, rename-vars, ...' in OPTIONS order, 'default', 'max', or
+    'none'."""
     if not options:
         return "none"
-    if set(options) == set(minifier.OPTIONS):
-        return "all"
-    return ", ".join(o for o in minifier.OPTIONS if o in options)
+    return preset_name(frozenset(options)) or ", ".join(o for o in minifier.OPTIONS
+                                                        if o in options)
 
 
 def minify_flag(options):
-    """The -m flag for options as the command line spells it: "-m" for every
-    option, "-m=a,b" (in OPTIONS order) for some, "" for none."""
+    """The -m flag for options as the command line spells it: "-m" for the
+    default options, "-m=max" for every option, "-m=a,b" (in OPTIONS order)
+    for some, "" for none."""
     if not options:
         return ""
-    if options == minifier.ALL_OPTIONS:
+    if options == minifier.DEFAULT_OPTIONS:
         return "-m"
-    return "-m=" + ",".join(o for o in minifier.OPTIONS if o in options)
+    return "-m=" + (preset_name(options)
+                    or ",".join(o for o in minifier.OPTIONS if o in options))
+
+
+# Options renamed since: an older build's `-- ticpak:` line still reads right.
+OLD_OPTIONS = {"rename": "rename-vars"}
 
 
 def flag_options(flag):
     """minify_flag() read back: the options a -m flag names (options this
     version does not know are dropped)."""
     if flag == "-m":
-        return minifier.ALL_OPTIONS
-    items = [o for o in flag[3:].split(",") if o in minifier.OPTIONS] \
+        return minifier.DEFAULT_OPTIONS
+    items = [OLD_OPTIONS.get(o, o) for o in flag[3:].split(",")] \
         if flag.startswith("-m=") else []
+    items = [o for o in items if o in minifier.OPTIONS or o in minifier.PRESETS]
     return minifier.parse_options(items) if items else frozenset()
 
 

@@ -5,20 +5,22 @@ ticpak's bundle imports it to shrink the amalgamated cart; `ticpak minify`
 runs it on its own.
 
 Options (docs/minify.md has usage, docs/minify-spec.md the contract), combined as
-a set - `comments,rename`; an empty set is a passthrough:
-  comments    remove comments; every other character stays where it was
-  whitespace  remove extraneous whitespace and newlines: one function start per
-              line, wrapped at 120 columns (without it, the source's line
-              breaks are kept, single-space indented)
-  rename      rename non-function variables to the shortest free names
-  constants   inline constant values and remove the constants
-  extra       the remaining optimisations: evaluate constant expressions,
-              remove unreachable code and anything nothing uses, call sugar,
-              alias heavily used API functions, share repeated strings and
-              numbers through locals, merge local statements
-`max` (this module's API only, not the ticpak CLI) means every option.
-Every option but `comments` works on the token stream, so it removes comments
-too.
+a set - `comments,rename-vars`; an empty set is a passthrough:
+  comments          remove comments; every other character stays where it was
+  whitespace        remove extraneous whitespace and newlines: one function
+                    start per line, wrapped at 120 columns (without it, the
+                    source's line breaks are kept, single-space indented)
+  rename-vars       rename non-function variables to the shortest free names
+  rename-functions  rename functions too (error messages then show the short
+                    names; the decode map has the originals)
+  constants         inline constant values and remove the constants
+  extra             the remaining optimisations: evaluate constant expressions,
+                    remove unreachable code and anything nothing uses, call
+                    sugar, alias heavily used API functions, share repeated
+                    strings and numbers through locals, merge local statements
+Two presets: `default`, every option but rename-functions, and `max`, every
+option. Every option but `comments` works on the token stream, so it removes
+comments too.
 
 Why no AST printer: luamin 1.0.4 (npm) re-prints expressions with Lua 5.1
 precedence and silently turned (x & y) + z into x&y+z (verified 2026-09-13 on
@@ -32,10 +34,12 @@ identifiers, so no expression is ever regrouped. The final text is re-lexed and 
 import bisect, math, re
 from decimal import Decimal
 
-OPTIONS = ("comments", "rename", "constants", "whitespace", "extra")
+OPTIONS = ("comments", "rename-vars", "rename-functions", "constants", "whitespace", "extra")
 OPTION_HELP = {
     "comments": "remove comments (keeps the metadata header and asset blocks)",
-    "rename": "rename variables to the shortest free names (1-2 letters)",
+    "rename-vars": "rename variables to the shortest free names (1-2 letters)",
+    "rename-functions": "rename functions to the shortest free names too"
+                        " (error messages then show the short names)",
     "constants": "inline constant values and remove the constants",
     "whitespace": "remove extraneous newlines and whitespace",
     "extra": "further optimisations (see --help for more info)",
@@ -51,18 +55,19 @@ EXTRA_HELP = {
     "merge":"merge adjacent local statements",
 }
 # The passes of the max pipeline (ALL_PASSES) each option runs.
-OPTION_PASSES = {"constants": ("inline",), "rename": ("rename",),
-                 "extra": tuple(EXTRA_HELP)}
+OPTION_PASSES = {"constants": ("inline",), "rename-vars": ("rename-vars",),
+                 "rename-functions": ("rename-functions",), "extra": tuple(EXTRA_HELP)}
 ALL_OPTIONS = frozenset(OPTIONS)
-# `max` = every option: kept for this module's API (the test suites and older
-# callers say mode="max"); the ticpak CLI does not accept it.
-PRESETS = {"max": OPTIONS}
+# `default`: every option but rename-functions, which costs readable error
+# messages (spec D11). `max`: every option.
+DEFAULT_OPTIONS = ALL_OPTIONS - {"rename-functions"}
+PRESETS = {"default": DEFAULT_OPTIONS, "max": ALL_OPTIONS}
 
 
 def parse_options(spec):
-    """'comments,rename' | 'max' | an iterable of either -> frozenset of
-    OPTIONS ('' or an empty iterable: no minification). Any option but
-    comments implies comments: it relexes the code."""
+    """'comments,rename-vars' | 'default' | 'max' | an iterable of any of
+    them -> frozenset of OPTIONS ('' or an empty iterable: no minification).
+    Any option but comments implies comments: it relexes the code."""
     items = spec.split(",") if isinstance(spec, str) else list(spec)
     out = set()
     for it in (i.strip() for i in items):
@@ -74,7 +79,8 @@ def parse_options(spec):
             out.add(it)
         else:
             raise ValueError(f"unknown minify option {it!r} (expected one or"
-                             f" more of {', '.join(OPTIONS)})")
+                             f" more of {', '.join(OPTIONS)}, or a preset:"
+                             f" {', '.join(PRESETS)})")
     if out:
         out.add("comments")
     return frozenset(out)
@@ -115,7 +121,8 @@ RESERVED = set(TIC80_GLOBALS) | CALLBACKS | EXTRA_RESERVED
 DYNAMIC_NAMES = {"_G", "_ENV", "load", "loadstring", "dofile", "loadfile", "debug",
                  "rawget", "rawset", "rawequal", "getfenv", "setfenv"}
 NAME_EST = 2          # assumed length of a renamed identifier in size decisions
-ALL_PASSES = ("fold", "inline", "dce", "shake", "rename", "sugar", "alias", "literals", "merge")
+ALL_PASSES = ("fold", "inline", "dce", "shake", "rename-vars", "rename-functions", "sugar",
+              "alias", "literals", "merge")
 UPPER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -531,6 +538,11 @@ def _targets(stmts, funcs, modules):
         t = type(s)
         if t in (LocalFunc, FuncStat):
             prot.append(s.func)
+            # the function's name too, as `local f = function` keeps f
+            if t is LocalFunc:
+                names.add((s.name.line, s.name.name))
+            elif not s.path and not s.method:
+                names.add((s.base.line, s.base.name))
         elif t in (Local, Assign):
             prot.extend(e for e in s.exprs if type(e) is Func and id(e) not in modules)
             ns = s.names if t is Local else [tg for tg in s.targets if type(tg) is Name]
@@ -1510,6 +1522,7 @@ class Binding:
         s.top_reads = []                          # globals: (chunk, idx, line)
         s.fctx = None; s.start = s.end = -1
         s.reserved = False; s.is_function = False; s.renamable = False
+        s.can_rename = False                      # renamable once functions are (rename-functions)
         s.implicit = False                        # method's implicit self
         s.cval = None; s.truth = None; s.inline = False
         s.live = False; s.deferred = []; s.newname = None
@@ -1564,11 +1577,13 @@ def require_target(e):
 class Info:
     """Everything one resolution pass learns about the program."""
 
-    def __init__(self, prog, whole, keep=frozenset()):
+    def __init__(self, prog, whole, keep=frozenset(), rename_functions=False):
         """keep: {(line, name)} of the variables a NOMINIFY directive keeps
         (Directives.names); each binding declared or assigned there is
-        pinned, and listed in self.kept as (name, line)."""
+        pinned, and listed in self.kept as (name, line). rename_functions:
+        function bindings (D11) are renamable too."""
         self.prog, self.whole = prog, whole
+        self.rename_functions = rename_functions
         self.globals, self.locals = {}, []
         self.dynamic = None
         self.chunks = {"<main>": prog.stmts}
@@ -1626,10 +1641,11 @@ class Info:
         for b in list(self.globals.values()) + self.locals:
             b.is_function = any(type(w.value) is Func for w in b.writes)
             if b.kind == "local":
-                b.renamable = not b.is_function and not b.implicit and not b.pinned
+                b.can_rename = not b.implicit and not b.pinned
             else:
-                b.renamable = (self.whole and self.dynamic is None and not b.reserved
-                               and not b.is_function and not b.pinned)
+                b.can_rename = (self.whole and self.dynamic is None and not b.reserved
+                                and not b.pinned)
+            b.renamable = b.can_rename and (self.rename_functions or not b.is_function)
 
 
 class _Resolver:
@@ -2003,7 +2019,7 @@ class Folder:
                 if L is None: continue
                 R = len(b.reads)
                 # a read costs the name's length after renaming - its own
-                # length when the rename option is off
+                # length when the rename-vars option is off
                 N = NAME_EST if renaming else len(b.name)
                 decl = 0 if (b.kind == "global" and not b.writes) else N + 1 + L + 1
                 b.inline = inline_all or L * R <= decl + R * N
@@ -2798,13 +2814,19 @@ def name_pool(excluded):
             continue
         yield n
 
-def pass_rename(info, report):
+def pass_rename(info, report, variables=True):
+    """Rename the renamable bindings (spec R8): variables (and goto labels)
+    unless variables is False, and functions when info says they are
+    renamable (rename-functions). Returns how many were renamed, and
+    {source line: bytes} that renaming functions saved."""
     # a variable a NOMINIFY directive keeps is pinned (Info), so not renamable
-    gl = [b for b in info.globals.values() if b.renamable and b.occ]
-    lo = [b for b in info.locals if b.renamable and b.occ]
+    def wanted(b):
+        return b.renamable and (variables or b.is_function)
+    gl = [b for b in info.globals.values() if wanted(b) and b.occ]
+    lo = [b for b in info.locals if wanted(b) and b.occ]
     fixed = set(RESERVED)
     for b in list(info.globals.values()) + info.locals:
-        if not b.renamable: fixed.add(b.name)
+        if not wanted(b): fixed.add(b.name)
     pool = list(_take(name_pool(fixed), len(gl) + len(lo) + 200))
     # local intervals and the renamable globals referenced inside each local's scope
     gocc = sorted((n.pos, i) for i, b in enumerate(gl) for n in b.occ if n.pos >= 0)
@@ -2838,13 +2860,17 @@ def pass_rename(info, report):
             break
         else:
             raise AssertionError(f"minify: name pool exhausted renaming {b.name}")
+    fn_saved = {}
     for b in gl + lo:
         if b.newname != b.name:
             report.renames.append((b.newname, b.name, b.kind, b.occ[0].line))
-        for n in b.occ: n.name = b.newname
+        for n in b.occ:
+            if b.is_function:
+                fn_saved[n.line] = fn_saved.get(n.line, 0) + len(b.name) - len(b.newname)
+            n.name = b.newname
     # labels: one namespace per function
     nl = 0
-    for f in info.fctxs:
+    for f in info.fctxs if variables else ():
         if not f.labels: continue
         if any(g.label is None for g in f.gotos): continue
         names = {}
@@ -2854,7 +2880,7 @@ def pass_rename(info, report):
         for g in f.gotos: g.name = names[id(g.label)]
         for lab in f.labels:
             lab.name = names[id(lab)]; nl += 1
-    return len(gl) + len(lo) + nl
+    return len(gl) + len(lo) + nl, fn_saved
 
 def _take(it, n):
     for i, x in enumerate(it):
@@ -2915,7 +2941,7 @@ def layout(toks, width=120):
 
 # What each option saved, by source line: measured only (savings=True), so
 # no pass depends on it.
-SAVINGS = ("comments", "whitespace", "constants", "extra", "rename")
+SAVINGS = ("comments", "whitespace", "constants", "extra", "rename-vars", "rename-functions")
 
 
 class Savings:
@@ -3035,10 +3061,10 @@ def _final_lines(text, toks):
     return out
 
 
-def _made_of(prog, toks, size, whole, keep_names, renamed):
+def _made_of(prog, toks, size, whole, keep_names, passes):
     """(left, names) for Savings: the output's bytes by what they are, and
-    the names that stayed with their total bytes. renamed: the rename pass
-    ran."""
+    the names that stayed with their total bytes. passes: the ones that ran
+    (which of the rename passes did)."""
     info = Info(prog, whole, keep_names)
     fields, opaque = [0], {}       # opaque: id(binding) -> uses inside protected bodies
 
@@ -3064,14 +3090,16 @@ def _made_of(prog, toks, size, whole, keep_names, renamed):
                 opaque[id(b)] = opaque.get(id(b), 0) + 1
     stmts(prog)
     walk_exprs(prog, expr)
-    api = renamable = 0
+    api = variables = functions = 0
     names = {}
     for b in list(info.globals.values()) + info.locals:
         n = _nbytes(b.name) * (len(b.occ) - opaque.get(id(b), 0))
         if b.reserved:
             api += n
-        elif b.renamable:
-            renamable += n
+        elif b.can_rename and b.is_function:
+            functions += n
+        elif b.can_rename:
+            variables += n
         elif n:
             names[b.name] = names.get(b.name, 0) + n
     kinds = {}
@@ -3085,10 +3113,13 @@ def _made_of(prog, toks, size, whole, keep_names, renamed):
             ("operators and punctuation", kinds.get("op", 0)),
             ("table field and method names", fields[0]),
             ("TIC-80 and Lua names (spr, math, ...)", api),
-            ("names never renamed (functions, globals, NOMINIFY)", kept),
-            ("renamed variable names" if renamed else "variable names rename would shorten",
-             renamable),
-            ("goto labels", kinds.get("name", 0) - fields[0] - api - kept - renamable),
+            ("names never renamed (globals, NOMINIFY)", kept),
+            ("renamed variable names" if "rename-vars" in passes
+             else "variable names rename-vars would shorten", variables),
+            ("renamed function names" if "rename-functions" in passes
+             else "function names rename-functions would shorten", functions),
+            ("goto labels", kinds.get("name", 0) - fields[0] - api - kept - variables
+             - functions),
             ("kept verbatim by NOMINIFY", kinds.get("raw", 0) + kinds.get("comment", 0)),
             ("spaces and line breaks", size - sum(kinds.values()))]
     return [x for x in left if x[1]], sorted(names.items(), key=lambda x: (-x[1], x[0]))
@@ -3158,10 +3189,10 @@ def savings_text(sv, names=8):
     text: Report.text rewrites those)."""
     tot = sv.total()
     out = ["bytes saved by option (UTF-8; negative: it added bytes):"]
-    out.append(f"  {'source':<12} {tot.get('source', 0):>8,}")
+    out.append(f"  {'source':<16} {tot.get('source', 0):>8,}")
     for k in SAVINGS:
-        out.append(f"  {k:<12} {tot.get(k, 0):>8,}")
-    out.append(f"  {'after':<12} {tot.get('final', 0):>8,}")
+        out.append(f"  {k:<16} {tot.get(k, 0):>8,}")
+    out.append(f"  {'after':<16} {tot.get('final', 0):>8,}")
     if sv.left:
         out += ["", "what the minified code is made of (bytes):"]
         out += [f"  {n:>8,}  {what}" for what, n in sv.left]
@@ -3205,7 +3236,7 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
     stage = {"input": _tok_lines(toks)} if savings else None
 
     def info_of(prog):
-        info = Info(prog, whole_program, nomi.names)
+        info = Info(prog, whole_program, nomi.names, "rename-functions" in passes)
         rep.nominify = info.kept
         return info
 
@@ -3222,7 +3253,7 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
                                         if not b.reserved and not b.pinned and not b.writes and b.reads
                                         and whole_program and info.dynamic is None)
             Folder(info, ("fold" in passes, "inline" in passes, "dce" in passes), rep,
-                   inline_all, renaming="rename" in passes).block(prog)
+                   inline_all, renaming="rename-vars" in passes).block(prog)
             pass_tidy(prog)
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
         if "shake" in passes:
@@ -3264,7 +3295,7 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
                 prog = reparse(strip_nl(toks))
     if "literals" in passes:
         saved, noted, limit = emit_tree(prog), len(rep.shared), None
-        while pass_literals(info_of(prog), rep, "rename" in passes, limit):
+        while pass_literals(info_of(prog), rep, "rename-vars" in passes, limit):
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
             worst = worst_upvals(prog)
             if worst <= 250:
@@ -3285,14 +3316,16 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
     rep.sizes.append(("small", toklen(toks)))
     if savings:
         stage["small"] = _tok_lines(toks)
-    if "rename" in passes:
+    fn_saved = {}
+    if passes & {"rename-vars", "rename-functions"}:
         info = info_of(prog)
-        pass_rename(info, rep)
+        _, fn_saved = pass_rename(info, rep, variables="rename-vars" in passes)
         toks = emit_tree(prog)
         prog = reparse(strip_nl(toks))
     rep.sizes.append(("renamed", toklen(toks)))
     if savings:
         stage["renamed"] = _tok_lines(toks)
+        stage["functions renamed"] = fn_saved
     rep.comments = [t[2] for t in toks if t[0] == "comment"]
 
     text, first_lines = layout(toks, width) if reflow else layout_lines(toks)
@@ -3323,14 +3356,18 @@ def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
     (optimised), after sugar/alias/merge (small), after rename (renamed),
     and the laid-out text. The fixpoint loop runs constants' pass (inline)
     together with extra's fold/dce/shake, so with both on, a second run
-    with inline alone measures constants' share and extra gets the rest."""
+    with inline alone measures constants' share and extra gets the rest.
+    One rename pass renames variables and functions together; what the
+    functions' names saved is counted as it renames them."""
     sv = Savings()
     source, com = _src_lines(src), _comment_lines(src, nomi.keep())
-    inp, opt, small, ren = (stage[k] for k in ("input", "optimised", "small", "renamed"))
+    inp, opt, small, ren, fn = (stage[k] for k in ("input", "optimised", "small", "renamed",
+                                                   "functions renamed"))
     final = _final_lines(text, toks)
     fix = _lin((1, inp), (-1, opt))
     if "inline" in passes and passes & {"fold", "dce", "shake"}:
-        alone = minify_max(src, passes={"inline"} | (passes & {"rename"}), nomi=nomi,
+        renames = passes & {"rename-vars", "rename-functions"}
+        alone = minify_max(src, passes={"inline"} | renames, nomi=nomi,
                            fixpoint_only=True, **run)
         const = _lin((1, inp), (-1, alone))
     else:
@@ -3345,10 +3382,11 @@ def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
     sv.add("constants", const)
     sv.add("extra", _lin((1, fix), (-1, const)))
     sv.add(tidy, _lin((1, opt), (-1, small)))
-    sv.add("rename", _lin((1, small), (-1, ren)))
+    sv.add("rename-vars", _lin((1, small), (-1, ren), (-1, fn)))
+    sv.add("rename-functions", fn)
     sv.add("final", final)
     sv.left, sv.names = _made_of(prog, toks, _nbytes(text), run["whole_program"],
-                                 nomi.names, "rename" in passes)
+                                 nomi.names, passes)
     return sv
 
 
@@ -3358,8 +3396,8 @@ def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
 
 def minify_ex(src, mode="max", whole_program=True, top_directive=True, savings=False,
               **opts):
-    """mode: anything parse_options() takes - 'comments,rename', 'max',
-    or a set of OPTIONS (empty: passthrough). top_directive: a NOMINIFY in
+    """mode: anything parse_options() takes - 'comments,rename-vars',
+    'default', 'max', or a set of OPTIONS (empty: passthrough). top_directive: a NOMINIFY in
     the source's top comment block leaves it all alone (minify_cart_ex says
     False: a cart's top block is its header, checked there). savings: also
     measure what each option saved, by source line (Result.savings)."""
@@ -3387,9 +3425,10 @@ def minify_ex(src, mode="max", whole_program=True, top_directive=True, savings=F
 def minify(src, mode="max", whole_program=True, **opts):
     """Minify Lua source; returns the text.
 
-    mode: option names, e.g. 'comments,rename' (see the module docstring),
-    'max' for every option (whole-program optimisation, minify-spec.md),
-    or '' for none (passthrough).
+    mode: option names, e.g. 'comments,rename-vars' (see the module
+    docstring), 'default' for every option but rename-functions, 'max' for
+    every option (whole-program optimisation, minify-spec.md), or '' for
+    none (passthrough).
     whole_program=False treats src as a fragment (one module on its own):
     globals are then never inlined, removed or renamed.
     """

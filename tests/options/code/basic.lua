@@ -3,7 +3,8 @@
 --
 -- Marker names the tests look for:
 --   CONST_*           inlined and removed by `constants`
---   renameme_*        shortened by `rename`
+--   renameme_*        shortened by `rename-vars`
+--   renamefn_*        functions, shortened by `rename-functions`
 --   unused_helper_fn  removed by `extra` (never called)
 --   DEAD_BRANCH       removed by `extra` (if false ... end)
 --   ("sugar_marker")  becomes "sugar_marker" call sugar under `extra`
@@ -19,10 +20,14 @@ renameme_player = {x = 10, y = 20}
 
 local renameme_frames = 0
 
-local function clamp(v, lo, hi)
+local function renamefn_clamp(v, lo, hi)
   if v < lo then return lo end
   if v > hi then return hi end
   return v
+end
+
+function renamefn_hud(score)
+  print("score " .. score, 2, 2, 12)
 end
 
 local function unused_helper_fn(a)
@@ -38,7 +43,7 @@ function TIC()
   local renameme_dx = 0
   if btn(2) then renameme_dx = renameme_dx - CONST_SPEED end
   if btn(3) then renameme_dx = renameme_dx + CONST_SPEED end
-  renameme_player.x = clamp(renameme_player.x + renameme_dx, 0, CONST_LIMIT)
+  renameme_player.x = renamefn_clamp(renameme_player.x + renameme_dx, 0, CONST_LIMIT)
   renameme_score = renameme_score + CONST_HALF * renameme_frames + CONST_NEG
 
   if false then trace("DEAD_BRANCH") end
@@ -46,7 +51,7 @@ function TIC()
   cls(0)
   spr(1, renameme_player.x, renameme_player.y, 0)
   map(0, 0, 30, 17)
-  print("score " .. renameme_score, 2, 2, 12)
+  renamefn_hud(renameme_score)
   trace("sugar_marker")
   for i = 1, 3 do
     rect(i * 8, 100, 6, 6, i)

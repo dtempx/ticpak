@@ -11,7 +11,7 @@
 -- package.preload entry, then the entry stub's requires and callbacks.
 --
 --   CONST_*        module-level constants read across modules (`constants`)
---   renameme_*     shortened by `rename`
+--   renameme_*     shortened by `rename-vars`
 --   UNUSED_MODULE  a preload entry nothing requires, removed by `extra`
 
 package.preload["constants"] = function(...)

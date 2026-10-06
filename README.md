@@ -17,7 +17,7 @@ cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
 code limit: 41K / 64K (64% used, 36% free)
-original code size: 151K (73% reduction with minify: all)
+original code size: 151K (73% reduction with minify: default)
 ```
 
 ## Quick start
@@ -39,7 +39,7 @@ checked against TIC-80's limits.
 For scripts and CI, skip the questions:
 
 ```
-ticpak bundle -m      # build if anything changed, minifying everything
+ticpak bundle -m      # build if anything changed, with the default minify options
 ticpak check         # check the cart already built
 ```
 
@@ -262,7 +262,8 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 |---|---|
 | `SOURCE` | the cart, or a folder searched for `main.lua` then `src/main.lua` (default: the current folder); or [a module on its own](#a-module-on-its-own) |
 | `-f`, `--force` | `bundle` only: build even when the cart is up to date |
-| `-m`, `--minify` | minify with every option (see [Minification](#minification)) |
+| `-m`, `--minify` | minify with the `default` options: every option but `rename-functions` (see [Minification](#minification)) |
+| `-m=max`, `--minify=max` | minify with every option, `rename-functions` included: the smallest cart |
 | `-m OPTION,...`, `--minify=OPTION,...` | minify with only the listed options (`-m=a,b` and `-ma,b` work too) |
 | *(no `-m`)* | no minification: the inlined source, verbatim |
 | `-o`, `--output PATH` | what to write: `NAME.tic`, `NAME.lua`, or a folder (see [Output](#output)); default `<name>.tic` beside `main.lua` |
@@ -276,7 +277,8 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 ticpak                          # interactive
 ticpak bundle                    # build + check, if anything changed
 ticpak bundle -f                 # build + check, always
-ticpak bundle -f -m              # every minify option: the smallest cart
+ticpak bundle -f -m              # the default minify options
+ticpak bundle -f -m=max          # every minify option: the smallest cart
 ticpak bundle -f -m=comments,whitespace   # only those options
 ticpak bundle --verbose          # with progress, the check's detail, minify savings
 ticpak bundle -q                 # no output: just the exit status
@@ -329,12 +331,14 @@ TIC-80 binary is needed. It exits 1 if any file has a violation.
 ### The minifier on its own
 
 `ticpak minify FILE` minifies one Lua file and writes the result to stdout.
-Each minify option is a flag of its own (`--comments`, `--rename`,
-`--constants`, `--whitespace`, `--extra`); with none of them, every option
-applies.
+Each minify option is a flag of its own (`--comments`, `--rename-vars`,
+`--rename-functions`, `--constants`, `--whitespace`, `--extra`); with none of
+them, the `default` options apply (every option but `--rename-functions`), and
+`--max` applies every option.
 
 ```
-ticpak minify enemies.lua > enemies.min.lua         # one module, every option
+ticpak minify enemies.lua > enemies.min.lua         # one module, the default options
+ticpak minify --max enemies.lua > enemies.min.lua   # every option
 ticpak minify --comments --whitespace enemies.lua   # just those options
 ticpak minify dist/mygame.lua > small.lua           # an unminified bundle
 ```
@@ -357,7 +361,7 @@ it minifies the file on its own (as a fragment: its globals are left alone,
 since other modules may use them) and writes `<module>.min.lua` beside it:
 
 ```
-ticpak bundle enemies.lua -m              # enemies.min.lua, every option
+ticpak bundle enemies.lua -m              # enemies.min.lua, the default options
 ticpak bundle enemies.lua -m -o small.lua # small.lua
 ticpak bundle enemies.lua -m -o out/      # out/enemies.min.lua
 ```
@@ -405,7 +409,7 @@ cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
 code limit: 41K / 64K (64% used, 36% free)
-original code size: 151K (73% reduction with minify: all)
+original code size: 151K (73% reduction with minify: default)
 ```
 
 - **cart size** is the `.tic` file's size.
@@ -416,7 +420,7 @@ original code size: 151K (73% reduction with minify: all)
   editor's 64K. Past it the line adds `- over the free editor's limit, fine
   on PRO (up to 512K)`.
 - **original code size** is the code's size before minification and the
-  saving, with the options used (`(73% reduction with minify: all)`), or `not
+  saving, with the options used (`(73% reduction with minify: default)`), or `not
   minified`. The options come from the cart's `-- ticpak:` line, so `check`
   shows them too. A cart built before ticpak 0.3.4 has no such line, and
   then only the size and the saving show.
@@ -446,13 +450,13 @@ each source file:
 
 ```
 minify: bytes saved, by file and option (negative: the option added bytes)
-file                    source  comments  whitespace  constants  extra  rename   total  reduction
-main.lua                 3,752     2,924          87         10      0      53     678        82%
-constants.lua            9,104     6,216       1,347      1,468      0      27      46        99%
-board.lua               12,241     6,357       1,206        478    141     375   3,684        70%
+file                    source  comments  whitespace  constants  extra  rename-vars   total  reduction
+main.lua                 3,752     2,924          87         10      3           56     672        82%
+constants.lua            9,104     6,216       1,347      1,468      0           27      46        99%
+helpers.lua              1,847     1,212         126         15     58          127     309        83%
 ...
-(added by ticpak)          974         0          75          0   -153      30   1,022        -5%
-total                   95,731    44,763      10,326      5,039    866   5,607  29,130        70%
+(added by ticpak)          994         0          75          0   -241           51   1,109       -12%
+total                   95,751    44,763      10,323      5,039    826        5,727  29,073        70%
 ```
 
 - **source** and **total** are each file's code in the bundle, before and
@@ -472,13 +476,17 @@ total                   95,731    44,763      10,326      5,039    866   5,607  
   can be negative where its aliases and shared literals (`local a,b=spr,"left"`) are declared, which is
   usually the `(added by ticpak)` row. That row is the bundle's own lines:
   the `package.preload` wrapper around each module.
+- **rename-vars** and **rename-functions** run as one pass, so the names
+  used most get the shortest, whatever they are. Each column counts what
+  shortening its own names saved.
 - A module that `extra` removed because nothing uses it ends with
   `(removed: unused)`.
 
 After the table comes what the minified code is made of: strings, numbers,
 keywords, operators, table field names, TIC-80 and Lua names, names never
-renamed (function names, globals), renamed variables, NOMINIFY code, spaces
-and line breaks. Then the biggest names that stayed, by total bytes. That
+renamed (globals the minifier can't safely rename, NOMINIFY names), variable
+names and function names (renamed, or what renaming them would shorten),
+NOMINIFY code, spaces and line breaks. Then the biggest names that stayed, by total bytes. That
 shows where the rest of the code budget goes. A module built on its own gets
 a one-row table.
 
@@ -490,16 +498,18 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 ? Cart name (.tic): [mygame]
 ? Minification:
-  1) all      - all minification options (smallest cart)  [default]
+  1) default  - every option but rename-functions (small, readable errors)  [default]
   2) comments - remove comments only
-  3) none     - no minification (the bundled source verbatim)
-  4) choose individual minification options...
+  3) max      - every option, rename-functions too (smallest cart)
+  4) none     - no minification (the bundled source verbatim)
+  5) choose individual minification options...
 ? Minify options (space toggles, enter accepts):
-   1) [x] comments    remove comments (keeps the metadata header and asset blocks)
-   2) [x] rename      rename variables to the shortest free names (1-2 letters)
-   3) [x] constants   inline constant values and remove the constants
-   4) [x] whitespace  remove extraneous newlines and whitespace
-   5) [x] extra       further optimisations
+   1) [x] comments          remove comments (keeps the metadata header and asset blocks)
+   2) [x] rename-vars       rename variables to the shortest free names (1-2 letters)
+   3) [ ] rename-functions  rename functions to the shortest free names too (error messages then show the short names)
+   4) [x] constants         inline constant values and remove the constants
+   5) [x] whitespace        remove extraneous newlines and whitespace
+   6) [x] extra             further optimisations
 ? Output:
   1) output mygame.tic only [default]
   2) output all files to a folder - mygame.tic (binary), mygame.lua (source), etc.
@@ -507,7 +517,7 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 
 `Output folder` is asked only if you choose the folder. Minification
-defaults to `all` here, unlike `bundle`, which minifies only with `-m`.
+defaults to `default` here, unlike `bundle`, which minifies only with `-m`.
 Options given on the
 command line (`-m`, `-n`, `-o`) become the defaults, and the report is
 written as in `bundle` (always for a folder, else with `-r`); `-o NAME.tic` or
@@ -561,25 +571,33 @@ added after the header's last line, and the file keeps its line endings.
 ## Minification
 
 The free TIC-80 editor holds 64K of code, so a large game may need its code
-shrunk. Without `-m` the bundle is not minified. `-m` on its own applies every
-option; `-m=OPTION,...` applies only those.
+shrunk. Without `-m` the bundle is not minified. `-m` on its own applies the
+`default` options, every option but `rename-functions`; `-m=max` applies every
+option; `-m=OPTION,...` applies only those (`default` and `max` can be listed
+too: `-m=default,rename-functions` is `-m=max`).
 
 | Option | What it does |
 |---|---|
 | `comments` | removes comments (keeps the metadata header and asset sections); nothing else changes |
-| `rename` | renames local variables to the shortest free names (1-2 letters); function names are kept so error messages stay readable |
+| `rename-vars` | renames variables to the shortest free names (1-2 letters) |
+| `rename-functions` | renames functions to the shortest free names too. Not in `default`: error messages then show the short names, so you need the [decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson) to read them. Table fields and methods (`M.update`, `obj:draw`) keep their names either way |
 | `constants` | inlines constant values and removes the constants |
 | `whitespace` | removes extraneous whitespace and newlines, packing lines to 120 columns |
 | `extra` | everything else: folds constant expressions (`2*8` → `16`), removes unreachable code and anything nothing uses, call sugar (`f("x")` → `f"x"`), short local aliases for heavily used API functions (`spr`, `math.floor`, ...), shares strings and numbers written several times through one local each (only where that saves space), and merges adjacent `local` statements |
 
-On one 21-module game (code characters; the free limit is 65,536):
+On one 20-module game (code characters; the free limit is 65,536):
 
 | Minification | Code |
 |---|---|
-| none | 154,092 |
-| `comments` | 66,262 |
-| `comments,whitespace` | 54,981 |
-| `-m` (every option) | 42,039 |
+| none | 95,748 |
+| `comments` | 47,802 |
+| `comments,whitespace` | 41,004 |
+| `-m` (`default`) | 29,073 |
+| `-m=max` | 27,370 |
+
+How much `rename-functions` adds depends on the code: about 2% for a game
+whose functions live in module tables (`M.update`), and up to 12% for one
+written as many global functions with long names.
 
 With a [folder output](#output), every option past `comments` also writes
 two files you need to decode a runtime error in the packaged cart:
@@ -606,7 +624,7 @@ comment lines in a row; a blank line or code ends the block), or a comment
 | Where the directive is | What is kept |
 |---|---|
 | directly above, or after, a variable's `local`, assignment or `for` | that variable: its name, declaration and value |
-| directly above a function, or after its first or last line | the whole function, byte for byte |
+| directly above a function, or after its first or last line | the whole function, byte for byte, and its name (`rename-functions` leaves it alone) |
 | a module's top comment block | the whole module, byte for byte |
 | `main.lua`'s header block (outside the metadata tags) | the whole cart |
 | anywhere else | the comment itself |
@@ -785,9 +803,9 @@ cart size: 134K
 
 ### The decode maps: `<name>.minify.txt` and `<name>.minify.json`
 
-Past `comments`, minification changes line numbers and renames local
-variables, so an error from the packaged cart no longer points at your
-sources. A folder build (`-o dist/`) writes these two maps beside the bundle
+Past `comments`, minification changes line numbers and renames variables
+(and functions, with `rename-functions`), so an error from the packaged cart
+no longer points at your sources. A folder build (`-o dist/`) writes these two maps beside the bundle
 to translate them back. Say TIC-80 reports:
 
 ```
@@ -795,7 +813,9 @@ to translate them back. Say TIC-80 reports:
 ```
 
 Line 37 is a line of the minified `<name>.lua`, and `b` is a renamed
-variable. `<name>.minify.json` translates both:
+variable. With `rename-functions`, a function's name in the message, such as
+`attempt to call a nil value (global 'q')` or a traceback's `in function 'q'`,
+is decoded the same way. `<name>.minify.json` translates both:
 
 - `"lines"` maps each bundle line to the source line it came from. Look up
   `"37"` and you get, say, `["enemies.lua", 112]`. Lines that ticpak added
@@ -871,7 +891,7 @@ new session, so it reads the new version.
 | `ticpak/minify.py` | the minifier (`ticpak minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
 
 `scripts/update_reserved.py` refreshes the minifier's list of TIC-80 API
-names (which `rename` must never take) from a TIC-80 binary.
+names (which renaming must never take) from a TIC-80 binary.
 
 ## Testing
 

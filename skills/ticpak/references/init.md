@@ -168,8 +168,10 @@ available:
   above a call) keeps just itself, for credits or licence lines. A blank
   line ends a comment block, and the word must stand alone (`NOMINIFY_X`
   doesn't count). A kept comment line must not start `-- <`.
-- Function names, table fields, methods and every TIC-80/Lua global are never
-  renamed. Tracebacks stay readable, and `obj.field` access is always safe.
+- Table fields, methods and every TIC-80/Lua global are never renamed, so
+  `obj.field` access is always safe. Function names are renamed only by the
+  opt-in `rename-functions` option (`-m=max`), so tracebacks stay readable
+  with a plain `-m`. A `NOMINIFY` comment on a function keeps its name too.
 
 Details: [docs/minify.md](https://github.com/dtempx/ticpak/blob/main/docs/minify.md).
 
