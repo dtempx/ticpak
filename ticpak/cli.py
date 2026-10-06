@@ -303,7 +303,7 @@ def minify_command(argv):
                     "requires no modules is the whole program, so anything it doesn't\n"
                     "use is removed; any other file is minified as one module,\n"
                     "leaving its globals alone.",
-        epilog="extra does:\n" + "\n".join(f"  {k:<6} {v}" for k, v in
+        epilog="extra does:\n" + "\n".join(f"  {k:<8} {v}" for k, v in
                                            minifier.EXTRA_HELP.items())
                + "\n\nfull documentation:"
                  " https://github.com/dtempx/ticpak/blob/main/docs/minify.md",

@@ -95,7 +95,7 @@ can't be a `.tic`.
    then the biggest names never renamed: function names and globals, which
    you can shorten by hand. A negative entry is normal. An inlined constant's
    bytes move to the file that reads it, and the `(added by ticpak)` row
-   holds the aliases `extra` declares. `(removed: unused)` marks a module
+   holds the aliases and shared literals `extra` declares. `(removed: unused)` marks a module
    that nothing uses.
 4. **Give the user the path to the `.tic`** (the `cart:` status line). That
    is the file tic80.com takes. For a web or native build, build with

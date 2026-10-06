@@ -57,7 +57,7 @@ debuggable: function names survive, and each function starts on its own line.
   file but a cart that requires no modules.
   beyondcastlewolfenstein's `check.py` uses it for per-module size estimates.
 - **I2. Pass switches.** `passes=<list>` (API only) picks a subset of the
-  max-mode passes: `fold,inline,dce,shake,rename,sugar,alias,merge`,
+  max-mode passes: `fold,inline,dce,shake,rename,sugar,alias,literals,merge`,
   defaulting to all. Layout (R3) and tidy (R11d) always run in max mode.
 - **I3. Width.** `width=N` (API only) sets the line width, default 120 (R3).
 - **I4. Python API.** `minify(src, mode, **opts)` and
@@ -514,8 +514,8 @@ edits on the original token stream, planned from the parse.
 
 **As built:** the passes edit the lossless tree described in R10b. Each pass
 works on a fresh parse and re-emits it. The fixpoint loop allows 20 rounds,
-and 2–3 is typical. The small passes (sugar, alias, merge, tidy) run *before*
-`rename`, so the aliases they create get short names too.
+and 2–3 is typical. The small passes (sugar, alias, literals, merge, tidy) run
+*before* `rename`, so the locals they create get short names too.
 
 **R10. Safety and verification.**
 - **a. Refuse rather than guess.** A parse error aborts with its line. A
@@ -531,8 +531,9 @@ and 2–3 is typical. The small passes (sugar, alias, merge, tidy) run *before*
      **lossless**: the tree must re-emit exactly the token stream it was built
      from, or the run aborts naming the token.
   2. Passes change the tree only by deleting statements, replacing a whole
-     subexpression with a literal, or renaming, so a token no pass touched
-     comes out unchanged.
+     subexpression with a literal or with a local holding the same value
+     (R11b, R11e), or renaming, so a token no pass touched comes out
+     unchanged.
   3. The final text must lex back to exactly the emitted tokens, and parse.
   4. No output line may read as an asset-chunk marker.
 - **c. Bytecode proof (test suite):** with only comment removal, layout and
@@ -613,6 +614,25 @@ individually switchable:
   a multi-value expression in a non-final position.
 - **d. Tidy** (always on): drop `;` separators, empty `else` arms, and empty
   `do end` blocks with no locals.
+- **e. `literals`** (added 2026-10-06): a string or number literal written N
+  ≥ 2 times is replaced by one `local` at the top of the main chunk, when
+  that saves size: `Σ (len(spelling) − len(name)) > len(name) + len(literal)
+  + 2`, a use written `f"s"` costing 2 more as it goes back to `f(a)`. Uses
+  are grouped by value (D7's subtype-aware values: `0x10` and `16` are one
+  value, `16` and `16.0` are two), and the declaration takes the shortest
+  spelling. Never shared: the argument of a literal `require "m"` and the
+  key of `package.preload[…]`/`package.loaded[…]`, which R7 and the module
+  timeline read. Fragments are shared too: a local at the top of a module
+  changes nothing outside it.
+
+  **As built:** runs after `alias`, sharing the cap of 180 top-level locals
+  (alias first). Names are costed at 2 characters with `rename`, else 5
+  (`__l12`). If any function would need more than 250 upvalues, the pass is
+  undone and retried sharing half as many (the best first), and the report
+  says so. A shared number in arithmetic becomes an upvalue read instead of
+  a constant operand: a small runtime cost, accepted for size. Result on the
+  8 ports: 363,290 → 359,484 characters (−1.0%; beyondcastlewolfenstein
+  −2.3%, dinoeggs −2.0%), 8/8 identical in `difftest`.
 - **Excluded:** removing "redundant" parentheses. It saves little and is
   exactly how npm luamin miscompiled wavynavy.
 
@@ -706,3 +726,11 @@ Tests live in `tests/minify/`: `run.py` (fold, bytecode, fixtures),
   directive above a preload line no longer protects the module; the word
   must be a whole word. Port output is unchanged (218 port files
   byte-identical under four option sets; 8/8 ports identical in `difftest`).
+- **2026-10-06:** `literals` (R11e) added to `extra`, at the owner's request,
+  after measuring what is left in the minified ports. Inlining small
+  functions was measured and rejected: about 1%, all of it from deleting
+  definitions of functions called once or twice; a function called in many
+  places grows the code when inlined, as its unrenamed name is shorter than
+  its body. `alias`'s traversal became the shared `slot_walk` (port output
+  without `literals` byte-identical), and its revert now keeps call sugar's
+  edits, which it used to drop.

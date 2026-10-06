@@ -174,6 +174,22 @@ for k = 1, 30 do
 end
 trace(acc, math.pi, math.huge > 1)
 
+-- @@ shared literals: one value, many spellings; int vs float; sugar; require
+package.preload["shared_mod"] = function(...)
+  return {name = "a string written many times over"}
+end
+local sm = require "shared_mod"
+local s = "a string written many times over"
+local function show(x) return x end
+trace(s == sm.name, show"a string written many times over", ("a string written many times over"):len())
+trace(4096, 0x1000, 4096.0, 4096 // 3, 4096.0 // 3, math.type(4096), math.type(4096.0), -4096, 4096 .. "")
+trace(0x1000 | 1, 4096 << 1, 4096, 4096, 4096, 4096 == 4096.0)
+local t = {[4096] = "int key", ["a string written many times over"] = 1}
+trace(t[4096], t[4096.0], t["a string written many times over"], t[sm.name])
+for i = 4090, 4096, 3 do trace(i, select("#", 4096, 4096)) end
+trace([[a string written many times over]], 'a string written many times over', "a string written many times over")
+trace(1, 1.0, 1, 1.0, 1, 1.0, 1, 1.0, 1, 1.0, 1, 1.0, math.type(1), math.type(1.0))
+
 -- @@ local merge must not merge a dependent initialiser
 local m1 = 1
 local m2 = m1 + 1

@@ -14,7 +14,8 @@ a set - `comments,rename`; an empty set is a passthrough:
   constants   inline constant values and remove the constants
   extra       the remaining optimisations: evaluate constant expressions,
               remove unreachable code and anything nothing uses, call sugar,
-              alias heavily used API functions, merge local statements
+              alias heavily used API functions, share repeated strings and
+              numbers through locals, merge local statements
 `max` (this module's API only, not the ticpak CLI) means every option.
 Every option but `comments` works on the token stream, so it removes comments
 too.
@@ -25,8 +26,8 @@ wavynavy). Max mode parses into a *lossless* concrete tree -- every token,
 parenthesis and separator of the source is kept -- and every parse is checked to
 re-emit exactly the token stream it was built from. Passes only delete
 statements, substitute a whole subexpression by a literal (parenthesised where
-precedence could change), or rename identifiers, so no expression is ever
-regrouped. The final text is re-lexed and re-parsed before it is returned.
+precedence could change) or by a local holding the same value, or rename
+identifiers, so no expression is ever regrouped. The final text is re-lexed and re-parsed before it is returned.
 """
 import bisect, math, re
 from decimal import Decimal
@@ -46,7 +47,8 @@ EXTRA_HELP = {
     "shake": "remove functions, variables and modules nothing uses",
     "sugar": 'call sugar: f("x") -> f"x", f({...}) -> f{...}',
     "alias": "alias heavily used API functions to short locals",
-    "merge": "merge adjacent local statements",
+    "literals": "share strings and numbers written several times through one local",
+    "merge":"merge adjacent local statements",
 }
 # The passes of the max pipeline (ALL_PASSES) each option runs.
 OPTION_PASSES = {"constants": ("inline",), "rename": ("rename",),
@@ -113,7 +115,7 @@ RESERVED = set(TIC80_GLOBALS) | CALLBACKS | EXTRA_RESERVED
 DYNAMIC_NAMES = {"_G", "_ENV", "load", "loadstring", "dofile", "loadfile", "debug",
                  "rawget", "rawset", "rawequal", "getfenv", "setfenv"}
 NAME_EST = 2          # assumed length of a renamed identifier in size decisions
-ALL_PASSES = ("fold", "inline", "dce", "shake", "rename", "sugar", "alias", "merge")
+ALL_PASSES = ("fold", "inline", "dce", "shake", "rename", "sugar", "alias", "literals", "merge")
 UPPER_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -2520,58 +2522,25 @@ def pass_sugar(prog, report):
     report.sugar += n[0]
     return n[0]
 
-ALIAS_SKIP = {"package", "require", "_G", "_ENV", "self", "arg"} | CALLBACKS
-
-def pass_alias(info, report):
-    """Alias heavily used reserved globals / library fields with one top-level local."""
-    prog = info.prog
-    if not info.whole or info.dynamic is not None:
-        return 0
-    field_writes = set()
-    for b in info.globals.values():
-        for w in b.writes:
-            pass
-    def collect_field_writes(blk):
-        for s in blk.stmts:
-            if type(s) is Assign:
-                for tg in s.targets:
-                    if type(tg) is Field and type(tg.obj) is Name and tg.obj.b.kind == "global":
-                        field_writes.add((tg.obj.name, tg.name))
-            if type(s) is FuncStat and s.path and s.base.b.kind == "global":
-                field_writes.add((s.base.name, s.path[0][0]))
-            for sub in sub_blocks(s): collect_field_writes(sub)
-            for e in stmt_exprs(s):
-                walk_exprs(e, lambda x: collect_field_writes(x.body) if type(x) is Func else None)
-    collect_field_writes(prog)
-    uses = {}                                       # key -> list of (parent setter)
-    def visit(e, setter):
-        t = type(e)
-        if t is Field and type(e.obj) is Name and e.obj.b is not None and e.obj.b.kind == "global" \
-                and e.obj.b.reserved and not e.obj.b.writes and not e.obj.b.pinned \
-                and e.obj.name not in ALIAS_SKIP \
-                and (e.obj.name, e.name) not in field_writes:
-            uses.setdefault(f"{e.obj.name}.{e.name}", []).append((setter, e))
-            return
-        if t is Name:
-            b = e.b
-            if b is not None and b.kind == "global" and b.reserved and not b.writes \
-                    and not b.pinned and e.name not in ALIAS_SKIP and b.name in TIC80_GLOBALS:
-                uses.setdefault(e.name, []).append((setter, e))
-            return
-        for attr in expr_slots(e):
-            visit_slot(e, attr)
+def slot_walk(prog, visit):
+    """Call visit(e, setter) for every expression in prog, outermost first,
+    where setter(x) puts x in e's place; visit returns True to skip e's
+    insides. Function bodies are walked too, and an assignment's targets'
+    objects and keys (not the targets themselves)."""
     def visit_slot(obj, attr):
-        v = getattr(obj, attr) if not isinstance(attr, tuple) else obj[attr[1]]
-        if isinstance(attr, tuple):
-            def setter(x, o=obj, i=attr[1]): o[i] = x
-        else:
-            def setter(x, o=obj, a=attr): setattr(o, a, x)
+        v = getattr(obj, attr)
         if type(v) is list:
             for i in range(len(v)):
                 def s2(x, lst=v, k=i): lst[k] = x
-                visit(v[i], s2)
+                visit_expr(v[i], s2)
         elif v is not None:
-            visit(v, setter)
+            def setter(x, o=obj, a=attr): setattr(o, a, x)
+            visit_expr(v, setter)
+    def visit_expr(e, setter):
+        if visit(e, setter):
+            return
+        for attr in expr_slots(e):
+            visit_slot(e, attr)
     def visit_block(blk):
         for s in blk.stmts:
             for attr in stmt_slots(s):
@@ -2593,11 +2562,11 @@ def pass_alias(info, report):
         if t is Table:
             out = []
             for f in e.fields:
-                if f[0] == "index": out.append(("f", 1, f))
-                if f[0] != "comment": out.append(("f", 2, f))
-            for _, i, f in out:
+                if f[0] == "index": out.append((1, f))
+                if f[0] != "comment": out.append((2, f))
+            for i, f in out:
                 def s3(x, f=f, i=i): f[i] = x
-                visit(f[i], s3)
+                visit_expr(f[i], s3)
             return ()
         return ()
     def stmt_slots(s):
@@ -2616,14 +2585,58 @@ def pass_alias(info, report):
         if t is Return: return ("exprs",)
         return ()
     visit_block(prog)
-    top_locals = sum(len(s.names) for s in prog.stmts if type(s) is Local) + \
-                 sum(1 for s in prog.stmts if type(s) is LocalFunc)
+
+def top_local_count(prog):
+    """The main chunk's top-level locals (Lua allows 200 per function)."""
+    return sum(len(s.names) for s in prog.stmts if type(s) is Local) + \
+           sum(1 for s in prog.stmts if type(s) is LocalFunc)
+
+TOP_LOCALS_CAP = 180      # the main chunk's top-level locals once alias/literals add theirs
+
+ALIAS_SKIP = {"package", "require", "_G", "_ENV", "self", "arg"} | CALLBACKS
+
+def pass_alias(info, report):
+    """Alias heavily used reserved globals / library fields with one top-level local."""
+    prog = info.prog
+    if not info.whole or info.dynamic is not None:
+        return 0
+    field_writes = set()
+    def collect_field_writes(blk):
+        for s in blk.stmts:
+            if type(s) is Assign:
+                for tg in s.targets:
+                    if type(tg) is Field and type(tg.obj) is Name and tg.obj.b.kind == "global":
+                        field_writes.add((tg.obj.name, tg.name))
+            if type(s) is FuncStat and s.path and s.base.b.kind == "global":
+                field_writes.add((s.base.name, s.path[0][0]))
+            for sub in sub_blocks(s): collect_field_writes(sub)
+            for e in stmt_exprs(s):
+                walk_exprs(e, lambda x: collect_field_writes(x.body) if type(x) is Func else None)
+    collect_field_writes(prog)
+    uses = {}                                       # key -> list of (parent setter)
+    def visit(e, setter):
+        t = type(e)
+        if t is Field and type(e.obj) is Name and e.obj.b is not None and e.obj.b.kind == "global" \
+                and e.obj.b.reserved and not e.obj.b.writes and not e.obj.b.pinned \
+                and e.obj.name not in ALIAS_SKIP \
+                and (e.obj.name, e.name) not in field_writes:
+            uses.setdefault(f"{e.obj.name}.{e.name}", []).append((setter, e))
+            return True
+        if t is Name:
+            b = e.b
+            if b is not None and b.kind == "global" and b.reserved and not b.writes \
+                    and not b.pinned and e.name not in ALIAS_SKIP and b.name in TIC80_GLOBALS:
+                uses.setdefault(e.name, []).append((setter, e))
+            return True
+        return False
+    slot_walk(prog, visit)
+    top_locals = top_local_count(prog)
     chosen = []
     for key, sites in sorted(uses.items(), key=lambda kv: -len(kv[1])):
         L = len(key)
         if len(sites) * (L - NAME_EST) <= NAME_EST + 1 + L + 1:
             continue
-        if top_locals + len(chosen) >= 180:
+        if top_locals + len(chosen) >= TOP_LOCALS_CAP:
             break
         chosen.append((key, sites))
     if not chosen:
@@ -2646,6 +2659,67 @@ def pass_alias(info, report):
         report.aliased.append((key, len(sites)))
     prog.stmts.insert(0, Local(names, exprs, line))
     return len(chosen)
+
+def pass_literals(info, report, renaming=True, limit=None):
+    """Share a string or number literal written several times through one
+    top-level local, when that saves size (spec R11e). limit: share at most
+    that many (the caller's retry when a function would need too many
+    upvalues). Returns how many were shared."""
+    prog = info.prog
+    skip = set()     # what other passes read as literals: require "m", package.preload["m"]
+    sugar = set()    # f"s" arguments: f(a) is two characters longer than f"s"
+    def mark(e):
+        t = type(e)
+        if t in (Call, Method) and e.form == "str":
+            sugar.add(id(e.args[0]))
+        if t is Call and require_target(e) is not None:
+            skip.update(id(a) for a in e.args)
+        if t is Index and type(e.obj) is Field and type(e.obj.obj) is Name \
+                and e.obj.obj.name == "package":
+            skip.add(id(e.key))
+    walk_exprs(prog, mark)
+    groups = {}                                     # value -> [(setter, Lit)]
+    def visit(e, setter):
+        if type(e) is Lit and e.kind in ("string", "number") and id(e) not in skip:
+            v = lit_value(e)                        # ("int", 1) and ("float", 1.0) differ
+            if v is not None:
+                groups.setdefault(v, []).append((setter, e))
+            return True
+        return False
+    slot_walk(prog, visit)
+    est = NAME_EST if renaming else 5               # `__l12` stays that long unrenamed
+    shared = []
+    for sites in groups.values():
+        if len(sites) < 2:
+            continue
+        text = min((e.text for _, e in sites), key=len)
+        gain = sum(len(e.text) - est - 2 * (id(e) in sugar) for _, e in sites) \
+            - (est + 1 + len(text) + 1)             # `a,` and `"text",` in the declaration
+        if gain > 0:
+            shared.append((gain, text, sites))
+    shared.sort(key=lambda s: -s[0])
+    room = max(0, TOP_LOCALS_CAP - top_local_count(prog))
+    shared = shared[:room if limit is None else min(room, limit)]
+    if not shared:
+        return 0
+    used = {b.name for b in info.locals} | set(info.globals)
+    names, exprs = [], []
+    line = prog.stmts[0].line if prog.stmts else 1
+    for i, (_, text, sites) in enumerate(shared):
+        nm = f"__l{i}"
+        while nm in used: nm += "_"
+        used.add(nm)
+        names.append(Name(nm, line))
+        exprs.append(Lit(sites[0][1].kind, text, line))
+        for setter, node in sites:
+            setter(Name(nm, node.line))
+        report.shared.append((text, len(sites)))
+    prog.stmts.insert(0, Local(names, exprs, line))
+    def unsugar(e):                                 # f"s" whose s is now a local: f(a)
+        if type(e) in (Call, Method) and e.form == "str" and type(e.args[0]) is not Lit:
+            e.form = "("
+    walk_exprs(prog, unsugar)
+    return len(shared)
 
 def pass_merge(info, report):
     n = [0]
@@ -3025,6 +3099,7 @@ class Report:
         self.inlined, self.kept = {}, {}          # (name, line) -> details
         self.removed_code, self.removed_bindings = [], []
         self.removed_modules, self.renames, self.aliased = [], [], []
+        self.shared = []                          # (literal, uses) shared by `literals`
         self.verbatim = []                        # lines of NOMINIFY-protected bodies
         self.nominify = []                        # (name, line) kept by NOMINIFY
         self.comments = []                        # lines of comments kept by NOMINIFY
@@ -3058,6 +3133,7 @@ class Report:
         sect("modules removed", self.removed_modules)
         out.append(f"trailing unused parameters dropped: {self.dropped_params}")
         sect("aliased globals", [f"{k}  ({n} uses)" for k, n in self.aliased])
+        sect("literals shared", [f"{k}  ({n} uses)" if n else k for k, n in self.shared])
         out.append(f"call sugar applied: {self.sugar}   local statements merged: {self.merged}")
         sect("UPPER_CASE names that are not constants",
              [f"{n}: {w}" for n, w in sorted(self.disqualified.items())])
@@ -3173,17 +3249,34 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
 
     if "sugar" in passes:
         pass_sugar(prog, rep)
+    def worst_upvals(prog):                       # Lua 5.3 allows 255 upvalues per function
+        return max((len(f.upvals) for f in info_of(prog).funcs), default=0)
     if "alias" in passes:
-        saved, saved_alias = toks, list(rep.aliased)
+        saved, saved_alias = emit_tree(prog), list(rep.aliased)   # sugar's edits included
         info = info_of(prog)
         if pass_alias(info, rep):
             toks = emit_tree(prog); prog = reparse(strip_nl(toks))
-            worst = max((len(f.upvals) for f in info_of(prog).funcs), default=0)
-            if worst > 250:                       # Lua 5.3 allows 255 upvalues per function
+            worst = worst_upvals(prog)
+            if worst > 250:
                 toks, rep.aliased = saved, saved_alias
                 rep.aliased.append(("(alias pass reverted: a function would need "
                                     f"{worst} upvalues)", 0))
                 prog = reparse(strip_nl(toks))
+    if "literals" in passes:
+        saved, noted, limit = emit_tree(prog), len(rep.shared), None
+        while pass_literals(info_of(prog), rep, "rename" in passes, limit):
+            toks = emit_tree(prog); prog = reparse(strip_nl(toks))
+            worst = worst_upvals(prog)
+            if worst <= 250:
+                break
+            # every shared literal a function reads is one more upvalue for it
+            # and every function around it: share half as many and try again
+            limit = (len(rep.shared) - noted) // 2
+            del rep.shared[noted:]
+            toks = saved; prog = reparse(strip_nl(toks))
+            rep.shared.append((f"(sharing cut to {limit}: a function would need "
+                               f"{worst} upvalues)", 0))
+            noted = len(rep.shared)
     if "merge" in passes:
         info = info_of(prog)
         pass_merge(info, rep)
@@ -3245,7 +3338,7 @@ def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
     # pass_tidy (redundant `;`, trailing table separators, empty else/do)
     # runs with any option past comments: without extra's small passes, its
     # few bytes count as whitespace, the layout's clean-up
-    tidy = "extra" if passes & {"sugar", "alias", "merge"} else "whitespace"
+    tidy = "extra" if passes & {"sugar", "alias", "literals", "merge"} else "whitespace"
     sv.add("source", source)
     sv.add("comments", com)
     sv.add("whitespace", _lin((1, source), (-1, com), (-1, inp), (1, ren), (-1, final)))

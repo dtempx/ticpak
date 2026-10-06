@@ -21,7 +21,7 @@ bundle`, `--comments --rename` for `ticpak minify`):
 | `rename` | Variables get the shortest free names (1–2 letters). A `NOMINIFY` comment keeps a name: see [Opting out](#opting-out-nominify). | rename |
 | `constants` | Constant values are inlined and the constants' declarations removed. With `extra` off, a restricted removal deletes only constants nothing reads any more; with `rename` off, the size check costs names at their real length. | inline |
 | `whitespace` | Extraneous newlines and whitespace removed: one function start per line, packed to 120 columns. **Without it, the source's line breaks are kept**, one space of indent per block level. | layout |
-| `extra` | Every further optimisation, together: constant expressions evaluated, unreachable code removed, functions/variables/modules nothing uses removed, call sugar, API aliasing, `local` merging. | fold, dce, shake, sugar, alias, merge |
+| `extra` | Every further optimisation, together: constant expressions evaluated, unreachable code removed, functions/variables/modules nothing uses removed, call sugar, API aliasing, repeated strings and numbers shared through locals, `local` merging. | fold, dce, shake, sugar, alias, literals, merge |
 
 To run a subset of `extra`'s passes (bisecting a problem), pass `passes=` to
 the module API (or `--passes=` to `tests/minify/difftest.py`); the command
@@ -48,8 +48,8 @@ plus `max` for every option.
 ## What `max` does
 
 The passes run in a fixed order: fold, inline, dead-code removal and tree
-shaking, repeated until nothing changes; then call sugar, aliasing, merging and
-tidying; then renaming; then layout. Each pass re-parses the program, so it
+shaking, repeated until nothing changes; then call sugar, aliasing, literal
+sharing, merging and tidying; then renaming; then layout. Each pass re-parses the program, so it
 always analyses the current code.
 
 | Pass | Effect |
@@ -60,6 +60,7 @@ always analyses the current code.
 | **shake** | Tree shaking by reachability, starting from the main chunk, the TIC-80 callbacks and every `require`d module. Unreachable functions are removed, including recursive ones, along with dead locals and globals whose initialiser is pure, `package.preload` modules that are never required, and trailing parameters that are never read. `local x = f()` with `x` dead becomes `f()`. Table fields are never removed. |
 | **sugar** | `f("s")` becomes `f"s"`, and `f({…})` becomes `f{…}`. |
 | **alias** | A heavily used API or library name (`spr`, `ipairs`, `math.floor`, …) gets a single local alias at the top of the main chunk. Every module is a closure nested inside the main chunk, so one alias covers all of them. This saves characters, and a local read is faster than a global one. It is skipped for any name the program writes, and reverted if a function would exceed Lua's 255-upvalue limit. |
+| **literals** | A string or number written more than once becomes one local at the top of the main chunk, when that saves size: the uses must save more than the declaration costs, so a literal written once is never touched and a short one needs many uses. Literals are grouped by value, so `0x10` and `16` share one local, while `16` and `16.0` (an integer and a float) do not. `f"s"` goes back to `f(a)` when `s` is shared, and that cost counts against the saving. The argument of a literal `require "m"` and the key of `package.preload["m"]` are never shared, as the other passes read them. If a function would exceed Lua's 255-upvalue limit, it shares half as many and tries again. A shared number used in arithmetic is read from a local instead of being a constant operand, a little slower in a hot loop. |
 | **merge** | Merges adjacent `local` statements (`local a=1 local b=2` becomes `local a,b=1,2`) when no initialiser reads an earlier name. |
 | **rename** | Locals (including parameters, loop variables and labels) and non-function globals get one- or two-character names, the most-referenced first. Names are reused where scopes don't overlap. **Not renamed:** function names (so tracebacks stay readable), table fields and methods, the implicit `self`, and every TIC-80/Lua global (see [Reserved names](#reserved-names)), and any variable kept by a `NOMINIFY` directive (below). |
 | layout | Every function definition starts a new line, at any depth. Otherwise tokens are packed into lines of at most 120 characters, breaking only between tokens. |
@@ -288,7 +289,7 @@ A folder build (`ticpak bundle -o dist/`) with any `--minify=` option past
   below, each entry naming its `file:line`:
   - the constants inlined, and those kept by the size check;
   - the code, bindings and modules removed;
-  - the names aliased;
+  - the names aliased, and the literals shared;
   - the UPPER_CASE names that are **not** constants, with the reason (for
     example `BANK: value is not a constant scalar (table)`);
   - the globals that are never written;
@@ -314,7 +315,7 @@ add up per file. Stage by stage:
 |---|---|
 | `comments` | the bytes of every comment removed (not those `NOMINIFY` keeps) |
 | `constants` | the token bytes the optimisation loop removes, run with `inline` alone |
-| `extra` | the rest of that loop (fold, dce, shake), then sugar, alias and merge |
+| `extra` | the rest of that loop (fold, dce, shake), then sugar, alias, literals and merge |
 | `rename` | the token bytes rename removes |
 | `whitespace` | what is left over: whitespace removed from the source, less what the layout puts back |
 
@@ -324,12 +325,12 @@ With both `constants` and `extra` on, the minifier runs the loop a second
 time with `inline` alone (well under a second for the largest port) and
 gives `extra` the difference. This measures constants first. A different
 order would split the same total differently. The redundant `;` and table
-separators that tidying removes count as `extra` when sugar, alias or merge
-run, and as `whitespace` otherwise.
+separators that tidying removes count as `extra` when sugar, alias, literals
+or merge run, and as `whitespace` otherwise.
 
 Options move bytes as well as remove them: an inlined constant's bytes go to
-the line that reads it, and an alias's `local` declaration to the line it is
-declared on. So one line's (or file's) saving for an option can be negative.
+the line that reads it, and the `local` declaring the aliases and shared
+literals to the line it is declared on. So one line's (or file's) saving for an option can be negative.
 Every line still balances: `before - after` is the sum of its options'
 savings. A module that shake removed has a `total` of 0 in ticpak's table.
 

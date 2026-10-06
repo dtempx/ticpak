@@ -469,7 +469,7 @@ total                   95,731    44,763      10,326      5,039    866   5,607  
   `extra` the rest.
 - Options move bytes as well as remove them. An inlined constant's bytes go
   to the file that reads it, so a file's `constants` can be negative. `extra`
-  can be negative where its aliases (`local a=spr`) are declared, which is
+  can be negative where its aliases and shared literals (`local a,b=spr,"left"`) are declared, which is
   usually the `(added by ticpak)` row. That row is the bundle's own lines:
   the `package.preload` wrapper around each module.
 - A module that `extra` removed because nothing uses it ends with
@@ -570,7 +570,7 @@ option; `-m=OPTION,...` applies only those.
 | `rename` | renames local variables to the shortest free names (1-2 letters); function names are kept so error messages stay readable |
 | `constants` | inlines constant values and removes the constants |
 | `whitespace` | removes extraneous whitespace and newlines, packing lines to 120 columns |
-| `extra` | everything else: folds constant expressions (`2*8` → `16`), removes unreachable code and anything nothing uses, call sugar (`f("x")` → `f"x"`), short local aliases for heavily used API functions (`spr`, `math.floor`, ...), and merges adjacent `local` statements |
+| `extra` | everything else: folds constant expressions (`2*8` → `16`), removes unreachable code and anything nothing uses, call sugar (`f("x")` → `f"x"`), short local aliases for heavily used API functions (`spr`, `math.floor`, ...), shares strings and numbers written several times through one local each (only where that saves space), and merges adjacent `local` statements |
 
 On one 21-module game (code characters; the free limit is 65,536):
 
@@ -809,7 +809,7 @@ variable. `<name>.minify.json` translates both:
 each pass, the bytes each option saved, what the minified code is made of,
 the biggest names that stayed, then every constant inlined, every piece of
 code or variable
-removed, every API function aliased, and everything kept by `NOMINIFY`, each
+removed, every API function aliased, every literal shared, and everything kept by `NOMINIFY`, each
 with its `file:line`. Read it when you want to know what happened to a
 particular name, or attach it when reporting a minifier bug. The file
 formats are described in [docs/minify.md](docs/minify.md#outputs).
