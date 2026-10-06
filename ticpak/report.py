@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The check for ticpak: check.py's report on the .tic, the closing size
 summary on screen, the --verbose detail (minify savings included), and the
-full report written flat to the -r file (<name>.ticpak.txt).
+full report written flat to the -r file (<name>.bundle.txt).
 """
 import contextlib
 import io

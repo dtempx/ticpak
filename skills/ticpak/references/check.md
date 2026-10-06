@@ -15,7 +15,7 @@ both); for anywhere else, give the same `-o` the build used. If it says the `.ti
 `.tic` or text-cart `.lua` files. For a `.lua`, it checks the header and lists
 the banks its `-- <MAP1>`-style section tags use. Both exit 0 when every check
 passes and 1 on any violation. To keep the full report in a file, add `-r`
-(`ticpak check -r` writes `<name>.ticpak.txt` beside the `.tic`; `-r PATH`
+(`ticpak check -r` writes `<name>.bundle.txt` beside the `.tic`; `-r PATH`
 writes it there). `-r` doesn't apply to `check FILE...`. Without `-r`, a
 `hint: see <path> for more info` line names a report an earlier build left beside
 the `.tic` (a folder build always writes one); read it for the savings by

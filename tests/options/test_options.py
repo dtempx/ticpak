@@ -536,21 +536,21 @@ class TestOutputs(unittest.TestCase):
                           base + ".minify.json", base + ".tic"))
 
     def test_report_paths(self):
-        """-r: <name>.ticpak.txt beside the output; -r PATH: that file, or
-        <name>.ticpak.txt in a folder."""
+        """-r: <name>.bundle.txt beside the output; -r PATH: that file, or
+        <name>.bundle.txt in a folder."""
         d = os.path.dirname(self.MAIN)
         self.assertEqual(bundle.Target(self.MAIN, "game", None, True).txt,
-                         os.path.join(d, "game.ticpak.txt"))
+                         os.path.join(d, "game.bundle.txt"))
         self.assertEqual(bundle.Target(self.MAIN, "game", "dist/", True).txt,
-                         os.path.join(os.path.abspath("dist"), "game.ticpak.txt"))
+                         os.path.join(os.path.abspath("dist"), "game.bundle.txt"))
         self.assertEqual(bundle.Target(self.MAIN, "game", "x/my.tic", True).txt,
-                         os.path.join(os.path.abspath("x"), "my.ticpak.txt"))
+                         os.path.join(os.path.abspath("x"), "my.bundle.txt"))
         self.assertEqual(bundle.Target(self.MAIN, "game", None, "r.txt").txt,
                          os.path.abspath("r.txt"))
         self.assertEqual(bundle.Target(self.MAIN, "game", None, "logs/").txt,
-                         os.path.join(os.path.abspath("logs"), "game.ticpak.txt"))
+                         os.path.join(os.path.abspath("logs"), "game.bundle.txt"))
         self.assertEqual(bundle.Target(self.MAIN, "game", None, HERE).txt,
-                         os.path.join(HERE, "game.ticpak.txt"))     # an existing folder
+                         os.path.join(HERE, "game.bundle.txt"))     # an existing folder
 
     def test_folder_build_report(self):
         """A build to a folder writes the report there without -r; a file
@@ -573,7 +573,7 @@ class TestOutputs(unittest.TestCase):
                     f.write("x")
             fresh, status = bundle.freshness(t)
             self.assertFalse(fresh)
-            self.assertIn("game.ticpak.txt missing", status)
+            self.assertIn("game.bundle.txt missing", status)
             with open(t.txt, "w") as f:
                 f.write("x")
             self.assertTrue(bundle.freshness(t)[0])
@@ -746,13 +746,13 @@ class TestSummary(unittest.TestCase):
                     self.assertEqual("bytes saved" in out.getvalue(), verbose)
                     self.assertIn("size: ", out.getvalue())
                     if report_to:
-                        self.assertIn("game.ticpak.txt", out.getvalue().splitlines()[-1])
-                        text = read_text(os.path.join(d, "game.ticpak.txt"))
+                        self.assertIn("game.bundle.txt", out.getvalue().splitlines()[-1])
+                        text = read_text(os.path.join(d, "game.bundle.txt"))
                         self.assertIn("minify: bytes saved", text)
                         self.assertIn("3,000", text)
                         self.assertTrue(text.startswith("check: "))
                     else:
-                        self.assertFalse(os.path.exists(os.path.join(d, "game.ticpak.txt")))
+                        self.assertFalse(os.path.exists(os.path.join(d, "game.bundle.txt")))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 

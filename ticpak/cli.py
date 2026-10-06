@@ -51,7 +51,7 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak bundle -o mygame.tic      just this .tic
   ticpak bundle -o mygame.lua      just the bundle (still boot-tested and checked)
   ticpak bundle -o dist/           dist/<name>.tic and .lua (the bundle)
-  ticpak bundle -f -r              also the full report: <name>.ticpak.txt beside the .tic
+  ticpak bundle -f -r              also the full report: <name>.bundle.txt beside the .tic
   ticpak bundle -f --report=r.txt  the full report to r.txt instead
   ticpak bundle -q                 no output: just the exit status
   ticpak bundle enemies.lua -m     one module on its own -> enemies.min.lua
@@ -156,7 +156,7 @@ def ask_build_settings(ui, minify, name, out):
 
 def build_report(report, out):
     """The report a build writes: -r's, else for a folder output
-    <name>.ticpak.txt in that folder all the same (None: no report file)."""
+    <name>.bundle.txt in that folder all the same (None: no report file)."""
     return report or (True if out is not None and out_kind(out) == "dir" else None)
 
 
@@ -227,8 +227,8 @@ def parse_args(argv):
                     type=report_arg,
                     help="bundle, check: also write the full report (the check in"
                          " full, what minification saved, the summary) to"
-                         " <name>.ticpak.txt beside the output, or to PATH (a"
-                         " file, or a folder to put <name>.ticpak.txt in). A"
+                         " <name>.bundle.txt beside the output, or to PATH (a"
+                         " file, or a folder to put <name>.bundle.txt in). A"
                          " build to a folder writes it there without -r")
     # --out still works: argparse takes any unambiguous prefix of --output.
     ap.add_argument("-o", "--output", dest="out", metavar="PATH",
@@ -487,8 +487,8 @@ def force_hint(command, check=None):
 
 def report_hint(t):
     """After a check that wrote no report: point at the one a build left
-    beside the output (<name>.ticpak.txt), if there is one."""
-    path = os.path.join(t.dist_dir, t.name + ".ticpak.txt")
+    beside the output (<name>.bundle.txt), if there is one."""
+    path = os.path.join(t.dist_dir, t.name + ".bundle.txt")
     if t.txt is None and os.path.isfile(path):
         print("hint: see " + highlight(fwd(path)) + " for more info")
 

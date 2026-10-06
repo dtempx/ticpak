@@ -14,7 +14,7 @@ tic80.com, the web player and `export html`/`export win` have no filesystem.
 ticpak closes that gap: it inlines the modules into one cart, optionally
 minifies it, boots it headless to prove it runs, saves `<name>.tic` beside
 `main.lua` (`-o` can choose a `.tic`, the `.lua` bundle, or a folder of
-both plus the full report `<name>.ticpak.txt`, which `-r` adds to a
+both plus the full report `<name>.bundle.txt`, which `-r` adds to a
 single-file build) and checks it
 against TIC-80's limits.
 

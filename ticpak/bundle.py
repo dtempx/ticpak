@@ -44,8 +44,8 @@ class Target:
     The name in a file -o is the file's own; `name` is used otherwise.
     report (-r; a folder build passes True without it): None for no report
     file (txt None), True for
-    <name>.ticpak.txt beside the output, else a path: a folder (ending in /
-    or \\, or one that exists) to put <name>.ticpak.txt in, or the file."""
+    <name>.bundle.txt beside the output, else a path: a folder (ending in /
+    or \\, or one that exists) to put <name>.bundle.txt in, or the file."""
 
     def __init__(self, cart, name, out=None, report=None):
         self.cart = os.path.abspath(cart)
@@ -64,7 +64,7 @@ class Target:
             self.name = os.path.splitext(os.path.basename(path))[0]
             self.dist_dir = os.path.dirname(path)
             setattr(self, self.kind, path)
-        report_name = self.name + ".ticpak.txt"
+        report_name = self.name + ".bundle.txt"
         if report is True:
             self.txt = os.path.join(self.dist_dir, report_name)
         elif report and (report.endswith(("/", "\\")) or os.path.isdir(report)):

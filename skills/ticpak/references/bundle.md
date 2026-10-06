@@ -11,14 +11,14 @@ after booting the bundle headless, and checks it. `<name>` is the header's
 | *(none)* | `<name>.tic` beside `main.lua`, nothing else |
 | `NAME.tic` | that `.tic` only |
 | `NAME.lua` | the bundle only (still boot-tested and checked) |
-| `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), `<name>.ticpak.txt` (the full report), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
+| `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), `<name>.bundle.txt` (the full report), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
 
 Use a folder (`-o dist/`) whenever you need the bundle or the decode maps:
 to decode an error, or for `export html`/`export win`. `-n` with
 `-o NAME.tic`/`NAME.lua` is an error: the file names itself.
 
 A folder build always writes the full report (the check in full, what
-minification saved, the summary) as `<name>.ticpak.txt` in the folder. For a
+minification saved, the summary) as `<name>.bundle.txt` in the folder. For a
 single-file output, `-r` writes it beside the output. `-r PATH` or
 `--report=PATH` writes it to that file, or into that folder. Put the cart's
 path before `-r`, or `-r` takes it as the report's path; a `.lua` or `.tic`

@@ -268,7 +268,7 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 | *(no `-m`)* | no minification: the inlined source, verbatim |
 | `-o`, `--output PATH` | what to write: `NAME.tic`, `NAME.lua`, or a folder (see [Output](#output)); default `<name>.tic` beside `main.lua` |
 | `-n`, `--name NAME` | output name without extension (default: saveid, else title); not with `-o NAME.tic`/`NAME.lua`, which name the file themselves |
-| `-r`, `--report [PATH]` | also write the full report: `<name>.ticpak.txt` beside the output, or `PATH` (a file, or a folder to put `<name>.ticpak.txt` in); a folder build writes it without `-r`. See [The full report](#the-full-report--r) |
+| `-r`, `--report [PATH]` | also write the full report: `<name>.bundle.txt` beside the output, or `PATH` (a file, or a folder to put `<name>.bundle.txt` in); a folder build writes it without `-r`. See [The full report](#the-full-report--r) |
 | `-q`, `--quiet` | print nothing; the exit status says how it went (0 OK, 1 failed or a violation, 2 a usage error). An error that stops ticpak still prints its one line to stderr. Needs a command; not with `--verbose` |
 | `-v`, `--version` | print the version |
 | `--verbose` | also show progress, the check's detail and what minification saved (`check --verbose`: the full check report) |
@@ -282,14 +282,14 @@ ticpak bundle -f -m=max          # every minify option: the smallest cart
 ticpak bundle -f -m=comments,whitespace   # only those options
 ticpak bundle --verbose          # with progress, the check's detail, minify savings
 ticpak bundle -q                 # no output: just the exit status
-ticpak bundle -f -r              # also the full report: <name>.ticpak.txt beside the .tic
+ticpak bundle -f -r              # also the full report: <name>.bundle.txt beside the .tic
 ticpak bundle -f --report=r.txt  # the full report to r.txt instead
 ticpak check                    # summary of the existing .tic
 ticpak check --verbose          # ...and the full check report
 ticpak bundle -n mygame          # mygame.tic beside main.lua
 ticpak bundle -o mygame.tic      # just this .tic (path relative to the current folder)
 ticpak bundle -o mygame.lua      # just the bundle
-ticpak bundle -o dist/           # dist/<name>.tic, .lua and .ticpak.txt (the report)
+ticpak bundle -o dist/           # dist/<name>.tic, .lua and .bundle.txt (the report)
 ticpak bundle path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak bundle enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
@@ -699,7 +699,7 @@ A folder build writes these files, all named after the output name:
 |---|---|---|
 | `<name>.lua` | the bundle: your whole game as one text cart | every build |
 | `<name>.tic` | the same cart in TIC-80's binary format: **the file to upload** | every build |
-| `<name>.ticpak.txt` | [the full report](#the-full-report--r): the check in full, what minification saved, the summary | every build (`-r PATH` puts it elsewhere) |
+| `<name>.bundle.txt` | [the full report](#the-full-report--r): the check in full, what minification saved, the summary | every build (`-r PATH` puts it elsewhere) |
 | `<name>.minify.txt` | the minifier's report: what each option saved and each pass did | builds with any minify option past `comments` |
 | `<name>.minify.json` | line and rename maps for decoding runtime errors | builds with any minify option past `comments` |
 
@@ -749,17 +749,17 @@ exports: load it in TIC-80 and run `export html <name>` or
 ### The full report: `-r`
 
 A folder build (`-o dist/`) always writes the full report,
-`<name>.ticpak.txt`, in the folder. Otherwise `bundle` and `check` write
+`<name>.bundle.txt`, in the folder. Otherwise `bundle` and `check` write
 nothing but the cart unless you ask: `-r` (or `--report`) also writes the
 full report. Either way a `report:` line names the file. A `check` without
 `-r` that finds a report a build left beside the output points at it
-(`hint: see dist/<name>.ticpak.txt for more info`).
+(`hint: see dist/<name>.bundle.txt for more info`).
 
 | Form | Writes |
 |---|---|
-| `-r` | `<name>.ticpak.txt` beside the output: beside `main.lua` by default, beside the file for `-o NAME.tic`/`NAME.lua` (in the folder for `-o dist/`, as without `-r`) |
+| `-r` | `<name>.bundle.txt` beside the output: beside `main.lua` by default, beside the file for `-o NAME.tic`/`NAME.lua` (in the folder for `-o dist/`, as without `-r`) |
 | `-r PATH`, `--report=PATH` | that file |
-| `-r DIR/` (or an existing folder) | `DIR/<name>.ticpak.txt` |
+| `-r DIR/` (or an existing folder) | `DIR/<name>.bundle.txt` |
 
 A `PATH` is relative to the current folder. One ending in `.lua` or `.tic`
 is an error: it is the `SOURCE` or an output read as the report's path. Put
@@ -925,3 +925,5 @@ also run real games frame by frame against their minified bundles.
 ## License
 
 MIT; see [LICENSE](LICENSE).
+
+> **AI disclosure:** ticpak was developed with the help of AI coding assistants.
