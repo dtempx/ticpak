@@ -689,13 +689,13 @@ class TestSummary(unittest.TestCase):
             out += struct.pack("<I", ctype | bank << 5 | (size % 65536) << 8) + b"x" * size
         return out
 
-    def summary(self, chunks, unminified):
+    def summary(self, chunks, unminified, colour=False):
         d = tempfile.mkdtemp(prefix="minify-summary-")
         try:
             path = os.path.join(d, "game.tic")
             with open(path, "wb") as f:
                 f.write(self.tic(chunks))
-            return report.size_summary(path, unminified)
+            return report.size_summary(path, unminified, colour)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -706,10 +706,10 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(lines, ["cart size: 72K",
                                      "code: 42K (58%)",
                                      "assets: 30K (42%)",
-                                     "code limit: 42K / 64K (66% used, 34% free)",
+                                     "code limit: 42K / 512K (8% used, 92% free)",
                                      "original code size: 154K (73% reduction)"])
 
-    def test_unminified_over_limit_two_banks(self):
+    def test_unminified_over_64k_two_banks(self):
         # code split over two chunks (64K + 6K), maps in banks 0 and 1;
         # total = 65535 + 6145 + 1024 + 1024 + 4 headers = 73744
         lines = self.summary([(5, 1, 65535), (5, 0, 6145), (4, 0, 1024), (4, 1, 1024)],
@@ -717,9 +717,27 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(lines, ["cart size: 72K",
                                      "code: 70K (97%)",
                                      "assets: 2.0K (3%)",
-                                     "code limit: 70K / 64K (109% used) - over the"
-                                     " free editor's limit, fine on PRO (up to 512K)",
-                                     "not minified"])
+                                     "code limit: 70K / 512K (14% used, 86% free)",
+                                     "not minified",
+                                     "info: code over 64K needs TIC-80 PRO to edit it"
+                                     " in TIC-80 (the cart plays in every TIC-80)"])
+
+    def test_near_and_over_512k(self):
+        """From 90% of the 512K code limit the line says so (yellow on
+        screen); at the limit it is over (red). The PRO note stays last."""
+        full = [(5, b, 65536) for b in range(7, 0, -1)]
+        near = self.summary(full + [(5, 0, 1024)], None)           # 449K of code
+        self.assertEqual(near[3], "code limit: 449K / 512K (88% used, 12% free)")
+        near = self.summary(full + [(5, 0, 20000)], None)          # 468K: 91%
+        self.assertEqual(near[3], "code limit: 468K / 512K (91% used, 9% free)"
+                                  " - close to TIC-80's code limit")
+        over = self.summary(full + [(5, 0, 65536)], None)          # 512K
+        self.assertEqual(over[3], "code limit: 512K / 512K (100% used)"
+                                  " - over TIC-80's code limit")
+        self.assertTrue(over[-1].startswith("info: code over 64K needs TIC-80 PRO"))
+        # no colour unless stdout shows it (here: captured)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.summary(full + [(5, 0, 65536)], None, colour=True), over)
 
     def test_savings_verbose_and_report_only(self):
         """What minification saved is --verbose detail and -r report content,
@@ -761,7 +779,25 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(lines, ["cart size: 0.98K",
                                      "code: 0.98K (100%)",
                                      "assets: 0.00K (0%)",
-                                     "code limit: 0.98K / 64K (2% used, 98% free)"])
+                                     "code limit: 0.98K / 512K (0% used, 100% free)"])
+
+    def test_bundle_over_code_limit_stops(self):
+        """A bundle at or over the code limit stops before booting: TIC-80
+        would cut it off."""
+        tmp = tempfile.mkdtemp(prefix="limit-")
+        saved = bundle.CODE_LIMIT
+        bundle.CODE_LIMIT = 2048
+        try:
+            t = bundle.Target(PROJECT_MAIN, "game", os.path.join(tmp, "x.lua"))
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaises(SystemExit) as e:
+                bundle.bundle(t, frozenset())
+            self.assertRegex(str(e.exception), r"^bundle: the code is [\d,]+ bytes, over"
+                                               r" TIC-80's 2K code limit .*\(-m=max\)")
+            self.assertFalse(os.path.exists(t.lua))
+        finally:
+            bundle.CODE_LIMIT = saved
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestStructure(unittest.TestCase):

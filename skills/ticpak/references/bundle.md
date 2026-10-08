@@ -14,7 +14,9 @@ after booting the bundle headless, and checks it. `<name>` is the header's
 | `DIR/`, or a name with neither extension | `DIR/<name>.tic`, `<name>.lua` (bundle), `<name>.bundle.txt` (the full report), and with `-m` past `comments` the decode maps `<name>.minify.txt`/`.json` |
 
 Use a folder (`-o dist/`) whenever you need the bundle or the decode maps:
-to decode an error, or for `export html`/`export win`. `-n` with
+to read the bundle or the minify report, or for `export html`/`export win`.
+Decoding an error needs neither: `ticpak error` works from the `.tic` alone
+(see the end of this file). `-n` with
 `-o NAME.tic`/`NAME.lua` is an error: the file names itself.
 
 A folder build always writes the full report (the check in full, what
@@ -56,12 +58,13 @@ can't be a `.tic`.
    | `-m=comments` | comments removed, line structure kept: a readable cart and a safe default |
    | `-m=comments,whitespace` | lines packed to 120 columns |
    | `-m` | the `default` preset, every option but `rename-functions` and `rename-tables` (`comments,rename-vars,constants,whitespace,extra`): small, and error messages still name functions, fields and methods |
-   | `-m=max` | every option, `rename-functions` and `rename-tables` too: the smallest cart, but error messages show short function, field and method names (decode them as below) |
+   | `-m=max` | every option, `rename-functions` and `rename-tables` too: the smallest cart, but error messages show short function, field and method names (`ticpak error` turns them back, as below) |
 
    On a 20-module game these gave 96K, 48K, 41K, 29K and 24K characters of
-   code. Go further than `comments` only if the user wants the code under the
-   free editor's 64K, or as small as possible. Code past 64K is fine on Pro,
-   and every player loads it. Choose `-m=max` only when `-m` isn't small
+   code. Go further than `comments` only if the code is near TIC-80's 512K
+   limit, the user wants it under 64K (editing more in TIC-80 needs Pro), or
+   they want it as small as possible. Code past 64K plays in every TIC-80,
+   tic80.com included. Choose `-m=max` only when `-m` isn't small
    enough: on eight games it saved another 2–20% (12% typical). `rename-functions` saves
    most on code written as many global functions, and `rename-tables` on
    code with many long field and method names. `rename-tables` renames keys
@@ -77,10 +80,14 @@ can't be a `.tic`.
    cart size: 110K
    code: 41K (37%)
    assets: 69K (63%)
-   code limit: 41K / 64K (64% used, 36% free)
+   code limit: 41K / 512K (8% used, 92% free)
    original code size: 151K (73% reduction with minify: default)
    ```
 
+   The code limit is TIC-80's 512K. From 90% the line adds `- close to
+   TIC-80's code limit`. With more than 64K of code, a last line says
+   `info: code over 64K needs TIC-80 PRO to edit it in TIC-80 (the cart
+   plays in every TIC-80)`: pass it on as a note, since it isn't a problem.
    Exit status 1 means a limit or header violation, printed above the
    summary. Explain it using [check.md](check.md). `--verbose` adds progress and the
    check's detail.
@@ -117,7 +124,7 @@ can't be a `.tic`.
 | `metadata header is incomplete` | Fill in the listed tags in `main.lua`. |
 | `module 'x' not found at ...` | `main.lua` requires a module that isn't at that path. Names are paths from the cart's folder (`a.b` is `a/b.lua`). |
 | boot output with `module 'x' not found`, then `FAILED to boot alone` | A module that only another module requires. Add `require "x"` to `main.lua`: ticpak inlines only the modules named there. |
-| boot output with `[string "..."]:N:` or `stack traceback` | A syntax or runtime error during boot. Decode `N` as below and fix the source. |
+| boot output with `[string "..."]:N:` or `stack traceback` | A syntax or runtime error during boot. Save the quoted output to a file and decode it with `ticpak error -m=... < boot.txt`, giving the same `-m` as the build (no `.tic` was saved, so the options must come from you), then fix the source. |
 | `TIC-80 reads a line starting -- < ...` | A module comment starts `-- <` in column 0. Reword or indent it, or build with at least `-m=comments`. |
 | `x.lua:N: a comment kept by NOMINIFY has a line starting -- <` | A comment that a `NOMINIFY` directive keeps would read as an asset section tag. Reword or indent that line. |
 | `x.lua:N starts an asset section (-- <MAP>), but only main.lua's asset sections are packaged` | A module holds asset data, which would be cut off or silently stripped. Move the whole section into `main.lua`'s asset sections, merging with any existing section of the same name. |
@@ -138,23 +145,34 @@ copied `.minify.txt` from the failing build.
 
 ## Decoding an error from a packaged cart
 
-TIC-80 reports `[string "-- title: ..."]:37: message`. Line 37 is a line of
-the **bundle**, not of a module. A default build keeps only the `.tic`, so
-first rebuild the same way (same `-m`) with `-f -o dist/` to get
-`dist/<name>.lua` and, past `comments`, its decode maps. The line numbers
-match: the bundle is the same. To find the `-m` it was built with, run
-`ticpak check <name>.tic`: its header lists `ticpak: 0.3.4 -m=...`, the line
-ticpak added to the cart (none on carts built before 0.3.4).
+TIC-80 reports `[string "-- title: ..."]:37: message` and a `stack
+traceback:`. Line 37 is a line of the **bundle**, not of a module, and once
+minified it can hold a whole function; past `rename-vars` the names in the
+message are short ones. Don't decode it by hand: `ticpak error` does it, for
+any build. Run it from the folder holding `main.lua` with the whole error,
+traceback included, either inline or from a file (it reads stdin without
+`-e`, so never run it bare):
 
-- **Built with any option past `comments`:** look up `"37"` under `"lines"` in
-  `dist/<name>.minify.json`. It gives `[file, line]` in your sources. The
-  file's `"renames"` list maps a short name in the message (`attempt to call
-  a nil value (global 'q')`, or with `-m=max` a traceback's `in function
-  'q'`) back to the original name.
-  `dist/<name>.minify.txt` gives the bytes each option saved, then lists
-  what each pass removed, inlined or renamed.
-- **Built with no `-m` or `-m=comments`:** open `dist/<name>.lua` at line 37.
-  The nearest `package.preload["mod"] = function(...)` above it names the
-  module. Without `-m`, the module's line is the bundle line minus that
-  wrapper's line. With `-m=comments`, removed comment lines shift the
-  numbering, so match the code text instead.
+```
+ticpak error -e '[string "-- title: ..."]:37: attempt to ...'
+ticpak error < error.txt
+```
+
+It finds the cart as `check` does (`<name>.tic` beside `main.lua` or in
+`dist/`; `-o`/`-n` for another build) and prints the error with each
+location as `file:line` and each name as written, then `source:` and the
+error's source line. Read the first line it prints:
+
+| First line | Meaning |
+|---|---|
+| `map: dist/<name>.minify.json` or `map: the sources rebuilt (-m=...); they match <cart>` | exact: the map is that cart's |
+| `map: <cart> not found; decoding against the sources built now` | there was no cart, so it decoded against a fresh build with the `-m` you gave |
+| `WARN <cart> does not match the sources built now` | the sources (or `-m`, or the ticpak version) changed since the build: the result is a guess. Decode against the sources as they were at that release (check them out), or rebuild and reproduce the error |
+
+A location `file:12-14` is a range: that bundle line held several calls the
+error could be (the same function called twice, say). `ticpak error` exits 1
+with `no location in the cart found` when the text has no `[string
+"..."]:N`; it needs `-m=...` when the cart has no `-- ticpak:` line (built
+before 0.3.4) or is missing. `dist/<name>.minify.txt` (a folder build past
+`comments`) lists what each pass removed, inlined or renamed, if you need
+more than the error.

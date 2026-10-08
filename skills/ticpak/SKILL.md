@@ -38,9 +38,11 @@ otherwise `check`.
 
 ## Rules for every action
 
-- **Always pass a command: `ticpak bundle` or `ticpak check`.** A bare `ticpak`
-  is interactive. With no terminal it refuses to run and exits with status 2.
-  `bundle` and `check` never prompt: anything missing becomes an error message.
+- **Always pass a command: `ticpak bundle`, `ticpak check` or `ticpak
+  error`.** A bare `ticpak` is interactive. With no terminal it refuses to run
+  and exits with status 2. The commands never prompt: anything missing
+  becomes an error message. (`ticpak error` reads the error from stdin
+  without `-e`: give it `-e TEXT` or redirect a file.)
   Don't pass `-q`: it prints nothing, so you'd have only the exit status
   to read.
 - **Find the tool.** Check that `ticpak --version` works. If it doesn't, use

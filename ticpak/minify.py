@@ -2892,6 +2892,8 @@ def pass_rename(info, report, variables=True):
     for b in gl + lo:
         if b.newname != b.name:
             report.renames.append((b.newname, b.name, b.kind, b.occ[0].line))
+            ps = [n.pos for n in b.occ if n.pos >= 0]
+            report.rename_pos.append((min(ps), max(ps)) if ps else None)
         for n in b.occ:
             if b.is_function:
                 fn_saved[n.line] = fn_saved.get(n.line, 0) + len(b.name) - len(b.newname)
@@ -3957,6 +3959,7 @@ def _pass_keys(info, report):
     for name in cands:
         if name in new:
             report.renames.append((new[name], name, "field", lines[name]))
+            report.rename_pos.append(None)
     report.keys_renamed = len(new)
     report.keys_kept = {r: sorted(v) for r, v in reasons.items()}
     return len(new)
@@ -4205,6 +4208,9 @@ class Report:
         self.inlined, self.kept = {}, {}          # (name, line) -> details
         self.removed_code, self.removed_bindings = [], []
         self.removed_modules, self.renames, self.aliased = [], [], []
+        # beside renames: each binding's first and last use as token positions
+        # (None for a table key, renamed everywhere)
+        self.rename_pos = []
         self.shared = []                          # (literal, uses) shared by `literals`
         self.verbatim = []                        # lines of NOMINIFY-protected bodies
         self.nominify = []                        # (name, line) kept by NOMINIFY
@@ -4288,9 +4294,19 @@ def savings_text(sv, names=8):
 
 
 class Result:
-    def __init__(self, text, report, renames, line_map, savings=None):
+    """text, report (None up to comments), renames [(new, old, kind, source
+    line)], line_map [(output line, source line of its first token)].
+    Past comments, also segments {output line: [(column, source line)]},
+    where each output line's tokens change source line (0-based columns),
+    and uses: beside renames, each binding's first and last use as
+    ((line, column), (line, column)) in the output, None for a table key."""
+
+    def __init__(self, text, report, renames, line_map, savings=None, segments=None,
+                 uses=None):
         self.text, self.report, self.renames, self.line_map = text, report, renames, line_map
         self.savings = savings
+        self.segments = {} if segments is None else segments
+        self.uses = [None] * len(renames) if uses is None else uses
 
 
 def toklen(toks):
@@ -4436,11 +4452,50 @@ def minify_max(src, whole_program=True, passes=None, width=120, inline_all=False
             raise AssertionError(f"minify: output line {i + 1} would read as an asset chunk marker")
     rep.sizes.append(("laid out", len(text)))
     line_map = list(enumerate(first_lines, 1))
+    at, placed = _out_positions(text, toks)
+    uses = [(at[p[0]], at[p[1]]) if p else None for p in rep.rename_pos]
     if savings:
         rep.savings = _max_savings(src, text, toks, prog, stage, passes, nomi,
                                    dict(whole_program=whole_program, width=width,
                                         inline_all=inline_all, reflow=reflow))
-    return Result(text, rep, rep.renames, line_map, rep.savings)
+    return Result(text, rep, rep.renames, line_map, rep.savings, line_segments(placed),
+                  uses)
+
+
+def _out_positions(text, toks):
+    """Where the laid-out tokens landed in text. Returns (at, placed): at[k]
+    is (output line, column) of the k-th token of strip_nl(toks) - a parse
+    position - (None for a kept comment), and placed lists (output line,
+    column, source line) for every token lexed from text. A protected body
+    is lexed into its own tokens, each on its own source line."""
+    offs = []
+    lex(text, offsets=offs)
+    nls = [i for i, c in enumerate(text) if c == "\n"]
+    def where(off):
+        n = bisect.bisect_left(nls, off)
+        return n + 1, off - (nls[n - 1] + 1 if n else 0)
+    at, placed, k = [], [], 0
+    for kind, t, line in strip_nl(toks):
+        if kind == "comment":
+            at.append(None)
+            continue
+        at.append(where(offs[k]))
+        for sub in (lex_lines(t) if kind == "raw" else [(kind, t, 1)]):
+            placed.append(where(offs[k]) + (line + sub[2] - 1,))
+            k += 1
+    return at, placed
+
+
+def line_segments(placed):
+    """{output line: [(column, source line)]} from (output line, column,
+    source line) in text order: where each line's tokens change source line.
+    Tokens with no source line (made by a pass) take the one before."""
+    out = {}
+    for line, col, src in placed:
+        seg = out.setdefault(line, [])
+        if src > 0 and (not seg or seg[-1][1] != src):
+            seg.append((col, src))
+    return {k: v for k, v in out.items() if v}
 
 
 def _max_savings(src, text, toks, prog, stage, passes, nomi, run):
@@ -4608,6 +4663,8 @@ def minify_cart_ex(text, mode=("comments",), meta_keys=None, savings=False, **op
     hl = header.count("\n") + len(sep)
     r.line_map = [(o + hl, i + h) for o, i in r.line_map]
     r.renames = [(n, o, k, l + h) for n, o, k, l in r.renames]
+    r.segments = {o + hl: [(c, i + h) for c, i in seg] for o, seg in r.segments.items()}
+    r.uses = [tuple((l + hl, c) for l, c in u) if u else None for u in r.uses]
     if r.report is not None:
         r.report.off = h
     if savings:

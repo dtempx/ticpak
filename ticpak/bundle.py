@@ -4,6 +4,8 @@ stub requires as a package.preload entry, minify (minify.py), and write
 the bundle .lua (for a folder output, plus the decode maps when minified
 past comments). Target decides which outputs a build keeps (see -o).
 """
+import bisect
+import hashlib
 import json
 import os
 import re
@@ -11,12 +13,11 @@ import sys
 
 from . import __version__
 from . import minify as minifier
-from .check import (META_LINE_RE, STAMP_RE, TEXT_SECTION_RE, check_header, parse_header,
-                    parse_tic, read_stamp, tic_code)
+from .check import (CODE_LIMIT, META_LINE_RE, STAMP_RE, TEXT_SECTION_RE, check_header,
+                    parse_header, parse_tic, read_stamp, tic_code)
 from .console import detail, fwd, show, step
 from .header import CHUNK_RE, META_KEYS, cart_code
 
-FREE_LIMIT = 65536  # the free editor's code cap (PRO edits up to 512 KB; every player loads it all)
 MINIFY_RATE = 300_000         # bytes/s minify_max measures savings at, for the progress bar
 ADDED = "(added by ticpak)"   # the savings row for the bundle's own lines: preload wrappers
 DEFAULT_DIR = "dist/"         # the interactive build's default output folder
@@ -306,19 +307,24 @@ def add_stamp(code, options):
     return "\n".join(lines), at
 
 
-def built_stamp(path):
-    """read_stamp() of an existing output (.tic or .lua); None if it has no
-    `-- ticpak:` line or cannot be read."""
+def built_code(path):
+    """The code of an existing output (.tic or .lua; a .lua's asset sections
+    too); None if it cannot be read."""
     try:
         with open(path, "rb") as f:
             data = f.read()
     except OSError:
         return None
     if path.lower().endswith(".tic"):
-        code = tic_code(data, parse_tic(data)[0])
-    else:
-        code = data.decode("utf-8", errors="replace")
-    return read_stamp(code)
+        return tic_code(data, parse_tic(data)[0])
+    return data.decode("utf-8", errors="replace")
+
+
+def built_stamp(path):
+    """read_stamp() of an existing output (.tic or .lua); None if it has no
+    `-- ticpak:` line or cannot be read."""
+    code = built_code(path)
+    return read_stamp(code) if code is not None else None
 
 
 def built_options(path):
@@ -356,20 +362,30 @@ def tag_lines(code, origin=None):
              " (--minify=comments), which removes it.")
 
 
-def bundle(t, minify_options=frozenset()):
-    """Build the bundle into t.code, and write it to t.lua (plus, for a folder
-    output, the decode maps) when the target keeps one. Returns its code size
-    before minification (bytes)."""
+class Built:
+    """One build's code, before anything is written: code (the bundle's code,
+    stamped, without the asset sections), chunks (the asset sections), the
+    modules' names, origin (bundle() line -> (file, line), see assemble), the
+    unminified bundle (source), the minifier's Result (res, its line numbers
+    in code's lines), and the unminified size in bytes, stamp included (raw).
+    """
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def build(t, minify_options=frozenset(), savings=False):
+    """Inline the modules, minify and stamp: a Built. Nothing is written."""
     step("inline", "inlining modules")
-    out, chunks, names, origin = assemble(t)
-    raw = len(out.encode("utf-8"))
+    source, chunks, names, origin = assemble(t)
+    raw = len(source.encode("utf-8"))
 
     if minify_options:
         step("minify", f"minifying {len(names)} modules ({minify_label(minify_options)})",
              raw / MINIFY_RATE)
     try:
-        res = minifier.minify_cart_ex(out, mode=minify_options, meta_keys=META_KEYS,
-                                      savings=bool(minify_options))
+        res = minifier.minify_cart_ex(source, mode=minify_options, meta_keys=META_KEYS,
+                                      savings=savings)
     except minifier.NominifyError as e:      # name the source file and line
         n = e.line
         where = (f"{origin[n - 1][0]}:{origin[n - 1][1]}"
@@ -381,11 +397,25 @@ def bundle(t, minify_options=frozenset()):
     tag_lines(out, origin if not minify_options else None)
     out, at = add_stamp(out, minify_options)
     if at is not None:      # the decode map's output lines move down past it
-        res.line_map = [(o + (o > at), i) for o, i in res.line_map]
+        def move(o):
+            return o + (o > at)
+        res.line_map = [(move(o), i) for o, i in res.line_map]
+        res.segments = {move(o): seg for o, seg in res.segments.items()}
+        res.uses = [tuple((move(l), c) for l, c in u) if u else None for u in res.uses]
     # The stamp is ticpak's own line, as the preload wrappers are: in the
     # size before minifying too, so the reduction compares like with like.
+    raw += len(out.encode("utf-8")) - len(res.text.encode("utf-8"))
+    return Built(code=out, chunks=chunks, names=names, origin=origin, source=source,
+                 res=res, raw=raw)
+
+
+def bundle(t, minify_options=frozenset()):
+    """Build the bundle into t.code, and write it to t.lua (plus, for a folder
+    output, the decode maps) when the target keeps one. Returns its code size
+    before minification (bytes)."""
+    b = build(t, minify_options, savings=bool(minify_options))
+    out, chunks, names, origin, res, raw = b.code, b.chunks, b.names, b.origin, b.res, b.raw
     stamp = len(out.encode("utf-8")) - len(res.text.encode("utf-8"))
-    raw += stamp
     if res.savings is not None:
         def file_of(line):
             f = origin[line - 1][0] if 0 < line <= len(origin) else None
@@ -405,28 +435,30 @@ def bundle(t, minify_options=frozenset()):
     if t.kind == "dir":     # a lone .lua is saved once it boots (save_bundle)
         save_bundle(t)
     if t.map_txt and res.report is not None:
-        write_maps(t, res, origin)
+        write_maps(t, b)
     elif t.map_txt:
         # Maps from an earlier minified build would decode this bundle wrongly.
         for path in (t.map_txt, t.map_json):
             if os.path.isfile(path):
                 os.remove(path)
 
-    size = len(out)
+    size = len(out.encode("utf-8"))
     detail(f"bundle: {len(names)} modules inlined"
            + (f" -> {show(t.lua)}" if t.lua else " (kept in memory)"))
     if minify_options:
-        detail(f"        code {raw} -> {size} chars "
+        detail(f"        code {raw} -> {size} bytes "
                f"({100 * (1 - size / raw):.1f}% smaller; minify: {minify_label(minify_options)})")
     else:
-        detail(f"        code {size} chars (not minified)")
-    detail(f"        {100 * size / FREE_LIMIT:.1f}% of the {FREE_LIMIT} char free-editor code limit")
-    if size > FREE_LIMIT:
-        detail(f"  INFO  (non-PRO) code is over the 64 KB free-editor limit; fine on PRO"
-               " (up to 512 KB), and every build's player loads it")
+        detail(f"        code {size} bytes (not minified)")
+    detail(f"        {100 * size / CODE_LIMIT:.1f}% of TIC-80's {CODE_LIMIT} byte code limit")
     if t.map_txt and res.report is not None:
         detail(f"        report and name/line maps -> {show(t.map_txt)},"
                f" {os.path.basename(t.map_json)}")
+    if size >= CODE_LIMIT:      # TIC-80 would cut it off when loading it
+        sys.exit(f"bundle: the code is {size:,} bytes, over TIC-80's {CODE_LIMIT // 1024}K"
+                 f" code limit (it holds {CODE_LIMIT - 1:,} bytes at most) - "
+                 + ("minify with more options (-m=max), or trim the code"
+                    if minify_options != minifier.ALL_OPTIONS else "trim the code"))
     return raw
 
 
@@ -459,25 +491,80 @@ def minify_module(t, minify_options=frozenset()):
     return len(src.encode("utf-8")), len(out.encode("utf-8"))
 
 
-def write_maps(t, res, origin):
-    """Any option past comments: the pass report, plus the maps that decode a
-    TIC-80 error.
+MAP_FORMAT = 2     # .minify.json: 2 added format, build, code, segments and uses
 
-    lines: output cart line -> the source file and line of its first token.
-    renames: every renamed identifier with its original name and source line.
-    """
+
+def code_part(text):
+    """A cart's code as the decode map fingerprints it: above the asset
+    sections, LF line endings, no trailing whitespace."""
+    m = CHUNK_RE.search(text)
+    return (text[:m.start()] if m else text).replace("\r\n", "\n").rstrip()
+
+
+def code_hash(text):
+    return "sha1:" + hashlib.sha1(code_part(text).encode("utf-8")).hexdigest()
+
+
+def map_doc(b):
+    """The decode map of a Built, as .minify.json holds it (ticpak error
+    reads it, or makes it in memory). Output lines are the cart's, source
+    lines [file, line] (file null for a line ticpak added):
+
+      build     the cart's `-- ticpak:` line: version and -m flag
+      code      code_hash() of the cart's code, to tell a stale map
+      lines     output line -> the source line of its first token
+      segments  output line -> [[column, file, line], ...]: where its tokens
+                change source line (0-based columns)
+      renames   every renamed identifier: new, old, kind (local, global,
+                field), source (where it is declared, or a key first
+                appears) and, for a variable, uses: its first and last use
+                as [line, column] in the output (a short name is reused, in
+                places that never overlap)
+
+    Up to comments, the minifier only drops comments and whitespace, so the
+    code's tokens pair one to one with the unminified bundle's."""
+    origin, res = b.origin, b.res
+
     def src(line):
         return list(origin[line - 1]) if 0 < line <= len(origin) else [None, 0]
-    doc = {
-        "cart": os.path.basename(t.lua),
-        "lines": {str(o): src(i) for o, i in res.line_map},
-        "renames": [{"new": n, "old": o, "kind": k, "source": src(l)}
-                    for n, o, k, l in res.renames],
+    if res.report is not None:
+        lines, segs = res.line_map, res.segments
+    else:
+        offs, at = [], []
+        minifier.lex(b.code, offsets=offs)
+        nls = [i for i, c in enumerate(b.code) if c == "\n"]
+        for off in offs:
+            n = bisect.bisect_left(nls, off)
+            at.append((n + 1, off - (nls[n - 1] + 1 if n else 0)))
+        placed = [(o, c, t[2]) for (o, c), t in zip(at, minifier.lex_lines(b.source))]
+        segs = minifier.line_segments(placed)
+        lines = [(o, seg[0][1]) for o, seg in sorted(segs.items())]
+    stamp = read_stamp(b.code)
+    renames = []
+    for (n, o, k, l), u in zip(res.renames, res.uses):
+        r = {"new": n, "old": o, "kind": k, "source": src(l)}
+        if u:
+            r["uses"] = [list(u[0]), list(u[1])]
+        renames.append(r)
+    return {
+        "format": MAP_FORMAT,
+        "build": " ".join(stamp).strip() if stamp else None,
+        "code": code_hash(b.code),
+        "lines": {str(o): src(i) for o, i in lines},
+        "segments": {str(o): [[c] + src(i) for c, i in seg] for o, seg in sorted(segs.items())},
+        "renames": renames,
     }
+
+
+def write_maps(t, b):
+    """Any option past comments: the pass report, plus the maps that decode a
+    TIC-80 error (map_doc)."""
+    doc = dict(cart=os.path.basename(t.lua), **map_doc(b))
     with open(t.map_json, "w", encoding="utf-8") as f:
         f.write(json.dumps(doc, indent=1) + "\n")
+    origin = b.origin
     def where(line):
-        f, n = src(line)
+        f, n = list(origin[line - 1]) if 0 < line <= len(origin) else [None, 0]
         return f"{f}:{n}" if f else f"bundle line {line}"
     with open(t.map_txt, "w", encoding="utf-8") as f:
-        f.write(res.report.text(where))
+        f.write(b.res.report.text(where))

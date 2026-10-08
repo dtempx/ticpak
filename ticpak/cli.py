@@ -13,6 +13,7 @@ work:
   report.py   check the .tic (check.py), the summary, the -r report file
   header.py   the metadata header: output name, missing tags, filling in
   console.py  --verbose, the flush-left console, the prompts
+  errors.py   `ticpak error`: a packaged cart's runtime error, decoded
   minify.py   the minifier;  check.py  the .tic checker
 """
 import argparse
@@ -23,12 +24,12 @@ import shutil
 import sys
 import tempfile
 
-from . import __version__, console
+from . import __version__, console, errors
 from . import minify as minifier
 from .bundle import (DEFAULT_DIR, Target, built_options, built_target, bundle, find_cart,
                      freshness, is_cart, minify_flag, minify_module, options_label,
                      out_kind, save_bundle, stub_requires, unminified_size)
-from .check import check_lua, check_tic
+from .check import check_lua, check_tic, parse_header
 from .console import FlatStdout, Progress, Prompts, fwd, has_terminal, highlight, show
 from .header import META_KEYS, cart_code, ensure_header, package_name, slug
 from .report import (check_summary, kb, made_of_lines, savings_table, size_summary,
@@ -56,12 +57,15 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak bundle -q                 no output: just the exit status
   ticpak bundle enemies.lua -m     one module on its own -> enemies.min.lua
   ticpak check main.lua dist/x.tic   check exactly these files: full report
+  ticpak error < error.txt        a runtime error from the packaged cart, in the
+                                   sources' files, lines and names
+  ticpak error -e "[string ...]:37: attempt to ..."   the error given inline
   ticpak minify enemies.lua       the minifier on its own (ticpak minify --help)
 
 full documentation: https://github.com/dtempx/ticpak#readme
 """
 
-COMMANDS = ("bundle", "check")       # `minify` is dispatched before argparse
+COMMANDS = ("bundle", "check", "error")      # `minify` is dispatched before argparse
 
 
 def minify_arg(text):
@@ -201,14 +205,16 @@ def parse_args(argv):
     """(command or None, argparse namespace, parser) for a command line."""
     ap = argparse.ArgumentParser(
         prog="ticpak",
-        usage="%(prog)s [bundle | check | minify] [SOURCE] [options]",
+        usage="%(prog)s [bundle | check | error | minify] [SOURCE] [options]",
         description="Package a TIC-80 cart for distribution: inline its modules,"
                     " minify, boot-test headless, save the .tic, and check it."
                     " With no command it asks what to do (at a terminal);"
                     " `bundle` (skips an up-to-date package unless --force) and"
                     " `check` run without prompts, for automation. `check FILE...`"
                     " checks the named .tic/.lua files instead of the project's"
-                    " package; `minify` runs the minifier on its own.",
+                    " package; `error` translates a runtime error from the"
+                    " package back to the sources; `minify` runs the minifier on"
+                    " its own.",
         epilog=EXAMPLES, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-v", "--version", action="version", version=f"ticpak {__version__}")
     ap.add_argument("sources", nargs="*", metavar="SOURCE",
@@ -256,12 +262,22 @@ def parse_args(argv):
                     help="show progress, the check's detail and what minification"
                          " saved (with `check`: the full check report), not just"
                          " the summary")
+    ap.add_argument("-e", "--error", dest="error_text", metavar="TEXT",
+                    help="error: the error message (and traceback) to translate;"
+                         " without it, read from stdin. -o and -n pick the cart"
+                         " it came from as they do for check; -m gives the"
+                         " options it was built with when it has no"
+                         " `-- ticpak:` line, or is not there")
     # The command is peeled off by hand: argparse cannot tell an optional
     # subcommand from the optional SOURCE positional.
     command = argv[0] if argv and argv[0] in COMMANDS else None
     args = ap.parse_args(argv[1:] if command else argv)
-    if command == "check" and args.force:
-        ap.error("--force applies to bundle, not check")
+    if command in ("check", "error") and args.force:
+        ap.error(f"--force applies to bundle, not {command}")
+    if command == "error" and (args.report or args.quiet):
+        ap.error("error: -r and -q apply to bundle and check")
+    if args.error_text is not None and command != "error":
+        ap.error("--error applies to the error command: ticpak error -e TEXT")
     if args.quiet and args.verbose:
         ap.error("--quiet and --verbose: choose one")
     if args.quiet and command is None:
@@ -283,7 +299,8 @@ def parse_args(argv):
                  " or give -o a folder")
     args.source = args.sources[0] if args.sources and not args.files else None
     # Without -m, build and check don't minify; the interactive question
-    # offers the default options as its default.
+    # offers the default options as its default. (error: the cart says.)
+    args.minify_given = args.minify is not None
     if args.minify is None:
         args.minify = frozenset() if command else minifier.DEFAULT_OPTIONS
     return command, args, ap
@@ -363,6 +380,9 @@ def main(argv=None):
         sys.stdout = FlatStdout(sys.stdout)
     if args.files:
         check_files(args.files, args.quiet)
+    if command == "error":
+        error_command(args)
+        return
     interactive = command is None
     if interactive and not has_terminal():
         print("ticpak: no terminal to prompt on. For automated runs, give a command:\n"
@@ -446,7 +466,7 @@ def main(argv=None):
         if t.tic and t.txt and t.kind != "dir":
             check_summary(t, unminified_size(t))
         elif t.tic:
-            print("\n".join(size_summary(t.tic, unminified_size(t))))
+            print("\n".join(size_summary(t.tic, unminified_size(t), colour=True)))
         force_hint(build_command(args.source, args.minify, t.name, package_name(meta),
                                  args.out, args.report, force=True),
                    check_command(args.source, t.name, package_name(meta), args.out))
@@ -468,6 +488,47 @@ def main(argv=None):
         # in the code, and the rebuild wants the same settings.
         if rerun:
             rerun_hint(rerun)
+
+
+def error_command(args):
+    """`ticpak error`: the error text (-e, else stdin) with each location in
+    the packaged cart and each short name translated back to the sources,
+    then the error's source line. Exits 1 when the text holds no location in
+    the cart."""
+    cart = find_cart(args.source)
+    if not cart or not is_cart(cart):
+        sys.exit("ticpak: error needs the cart (main.lua) the package was built from:"
+                 " run from its directory, or give its location")
+    name = slug(args.name) if args.name else package_name(parse_header(cart_code(cart)))
+    t = (Target(cart, name or "game", args.out) if args.out
+         else built_target(cart, name or "game"))
+    text = args.error_text
+    if text is None:
+        if sys.stdin.isatty():
+            eof = "Ctrl+Z then Enter" if os.name == "nt" else "Ctrl+D"
+            print(f"paste the error message and its traceback, then {eof}:",
+                  file=sys.stderr)
+        text = sys.stdin.read()
+    if not errors.LOC_RE.search(text):
+        sys.exit('ticpak: no location in the cart found in the error text - TIC-80'
+                 ' writes one as [string "-- title: ..."]:37:')
+    dec, notes = errors.find_map(t, args.minify if args.minify_given else None)
+    for note in notes:
+        print(note)
+    out, first, missing = errors.decode(text, dec)
+    if first:
+        line = errors.source_line(t.cart_dir, first)
+        if line is not None:
+            out = out.rstrip("\n") + f"\n\nsource: {first[0]}:{first[1]}\n    {line.strip()}"
+    # as TIC-80 wrote it, indents and all: not through the flush-left console
+    sys.stdout.flush()
+    raw = getattr(sys.stdout, "inner", sys.stdout)
+    raw.write("\n" + out.rstrip("\n") + "\n")
+    raw.flush()
+    if missing:
+        print(f"  WARN  line{'s' if len(missing) > 1 else ''}"
+              f" {', '.join(map(str, missing))} not in the cart - is the error from"
+              " another build?")
 
 
 def build_plan(minify):

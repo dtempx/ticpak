@@ -26,12 +26,12 @@ file and option, which `check` alone doesn't show.
 | Line | Meaning | What to do |
 |---|---|---|
 | `OVER  <SECTION> bank N` | An asset section exceeds its RAM region and would be truncated on load. A failure. | Shrink that section's data. |
-| `OVER  total file` | The `.tic` is over 256 KB, which hosting sites may reject. A failure. | Remove unused assets, or minify the code (`-m`). |
+| `OVER  code` | The code is at or over TIC-80's 512 KB code limit, so TIC-80 would cut it off. A failure. `bundle` stops on this before booting: `the code is N bytes, over TIC-80's 512K code limit`. | Minify (`-m`, then `-m=max`), or trim the code. |
 | `MISSING  header field` | A required tag is absent, empty or still TIC-80's placeholder. A failure. | If `main.lua` fails, fill the tag in there. If `main.lua` passes but the `.tic` fails, the package is stale: rebuild with `ticpak bundle -f`. |
 | `WARN  no SCREEN chunk` | No cover screenshot, so tic80.com shows a blank thumbnail. Not a failure. | Run the game in TIC-80, press **F7**, save `main.lua`, rebuild. If `main.lua` already has `-- <SCREEN>`, the package is stale: rebuild. |
 | `WARN  banks N carry data but the code never calls sync()` | Data in banks 1–7 that nothing can load, since only `sync()` reads those banks. Often an editor leftover. | Ask the user whether it's intended. |
 | `WARN  trailing bytes` | Bytes after the last chunk. The file may be damaged. | Rebuild. |
-| `INFO  (non-PRO) ...` | Code over 64 KB, or data in banks 1–7. Never a failure. | The free TIC-80 *editor* can't show this, but every player, including the web player, loads it. Pass this on as a one-line "fine on Pro" note. |
+| `INFO  (non-PRO) ...` | Code over 64 KB, or data in banks 1–7. Never a failure. | Editing it in TIC-80 needs Pro, but every player loads it, including the web player and tic80.com. Pass this on as a one-line note. |
 
 ## Reporting
 
@@ -41,8 +41,9 @@ one line each for:
 - **Banks**, e.g. "0 only (1–7 unused)" or "0, 1 (MAP), 3 (MAP)". The full
   report lists each used bank's sections and a `bank N total` line, in bytes
   used of the bank's 82,360 (`/ 82,360 bytes (NN%)`). Code is not
-  banked. It is one program that a `.tic` stores in 64 KB pieces, so never
-  describe code as being "in banks".
+  banked. It is one program that TIC-80 saves in `CODE` chunks of up to
+  64 KB each and joins back together on load, so never describe code as
+  being "in banks".
 - **Screenshot**: present, or missing with the F7 fix.
 - **Header**: complete, or the missing tags and which file lacks them.
 
@@ -65,7 +66,7 @@ data instead of tiles is expected.
 
 | Section | Limit |
 |---|---|
-| Code | 64 KB in the free editor, 512 KB with Pro (one program, never banked) |
+| Code | 512 KB (524,287 bytes) in every build. Over 64 KB plays everywhere, but editing it in TIC-80 needs Pro. |
 | TILES, SPRITES | 8,192 bytes each, per bank |
 | MAP | 32,640 bytes per bank |
 | SFX samples | 4,224 bytes |
@@ -74,4 +75,4 @@ data instead of tiles is expected.
 | Palette / flags | 96 / 512 bytes |
 | Screen | 16,320 bytes |
 | One bank (all of the above but code) | 82,360 bytes |
-| Total `.tic` | 256 KB |
+| Total `.tic` | No limit (tic80.com hosts carts of up to 1 MB) |

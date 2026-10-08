@@ -95,9 +95,18 @@ def colour(stream):
     return True
 
 
+TINTS = {"highlight": 96, "warn": 93, "error": 91}   # bright cyan, yellow, red
+
+
+def tint(text, kind):
+    """text in kind's colour (TINTS; None: none) when stdout shows colour;
+    else text as is."""
+    return f"\033[{TINTS[kind]}m{text}\033[0m" if kind and colour(sys.stdout) else text
+
+
 def highlight(text):
     """text in bright cyan when stdout shows colour; else text as is."""
-    return f"\033[96m{text}\033[0m" if colour(sys.stdout) else text
+    return tint(text, "highlight")
 
 
 def is_console(stream):

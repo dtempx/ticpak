@@ -16,7 +16,7 @@ cart: mygame.tic (up-to-date)
 cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
-code limit: 41K / 64K (64% used, 36% free)
+code limit: 41K / 512K (8% used, 92% free)
 original code size: 151K (73% reduction with minify: default)
 ```
 
@@ -141,6 +141,7 @@ Everything is a subcommand of `ticpak`:
 | `ticpak bundle` | build and check the project's package |
 | `ticpak check` | check the project's built package |
 | `ticpak check FILE...` | check any `.tic` or `.lua` files you name |
+| `ticpak error` | translate a runtime error from the package back to your files, lines and names |
 | `ticpak minify FILE` | the Lua 5.3 minifier on its own ([docs/minify.md](docs/minify.md)) |
 
 ## What your project looks like
@@ -223,7 +224,9 @@ asset data, stored as hex in comment lines.
    code.
 4. **Boots the bundle headless** in TIC-80, from a temporary folder holding
    only that file, so a missing module or a syntax error fails now rather
-   than after you upload.
+   than after you upload. Code at or over TIC-80's
+   [512K limit](#tic-80s-limits) stops before this step, since TIC-80 would
+   cut it off.
 5. **Saves `<name>.tic`**, the file you upload, beside `main.lua` (or where
    [`-o`](#output) says).
 6. **Checks the `.tic`**: the code budget, every asset section's size, the
@@ -244,6 +247,7 @@ release. `main.lua` and the modules stay your sources.
 ```
 ticpak [bundle | check] [SOURCE] [options]
 ticpak check FILE... [-q]
+ticpak error [SOURCE] [-o PATH] [-n NAME] [-m...] [-e TEXT]
 ticpak minify [options] FILE
 ```
 
@@ -253,10 +257,12 @@ ticpak minify [options] FILE
 | `bundle` | builds and checks, or does nothing when the cart is up to date | never |
 | `check` | checks the project's existing `.tic` without building | never |
 | `check FILE...` | checks exactly the files named ([below](#checking-any-file)) | never |
+| `error` | translates an error from the packaged cart back to the sources ([below](#errors-from-the-packaged-cart)) | never; reads the error from stdin without `-e` |
 | `minify FILE` | the minifier on its own ([below](#the-minifier-on-its-own)) | never |
 
-`bundle` and `check` never wait for input, so they are the forms for scripts,
-CI and AI agents. Anything missing is an error message saying what is needed.
+`bundle`, `check` and `error` never ask questions, so they are the forms for
+scripts, CI and AI agents. Anything missing is an error message saying what
+is needed.
 
 | Option | Meaning |
 |---|---|
@@ -272,6 +278,7 @@ CI and AI agents. Anything missing is an error message saying what is needed.
 | `-q`, `--quiet` | print nothing; the exit status says how it went (0 OK, 1 failed or a violation, 2 a usage error). An error that stops ticpak still prints its one line to stderr. Needs a command; not with `--verbose` |
 | `-v`, `--version` | print the version |
 | `--verbose` | also show progress, the check's detail and what minification saved (`check --verbose`: the full check report) |
+| `-e`, `--error TEXT` | `error` only: the error message and traceback to translate (default: read from stdin) |
 
 ```
 ticpak                          # interactive
@@ -293,6 +300,7 @@ ticpak bundle -o dist/           # dist/<name>.tic, .lua and .bundle.txt (the re
 ticpak bundle path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak bundle enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
+ticpak error < error.txt         # an error from the .tic, in your files and names
 ticpak minify enemies.lua        # one module, minified, to stdout
 ```
 
@@ -327,6 +335,62 @@ A `.tic` gets the full check: every section against its size limit, the code
 budget, the banks, the cover screenshot and the header. A text-cart `.lua`
 gets the header check and the banks its `-- <MAP1>`-style section tags use. No
 TIC-80 binary is needed. It exits 1 if any file has a violation.
+
+### Errors from the packaged cart
+
+TIC-80 reports a runtime error as a line of the bundle, and once minified
+that line can hold a whole function, its names shortened:
+
+```
+[string "-- title:  My Game..."]:11: attempt to index a nil value (field 'd')
+stack traceback:
+	[string "-- title:  My Game..."]:11: in upvalue 'e'
+	[string "-- title:  My Game..."]:12: in function 'enemies.a'
+	[string "-- title:  My Game..."]:14: in function 'TIC'
+```
+
+`ticpak error` translates it back. Paste the message and its traceback into
+it (end with Ctrl+D, or Ctrl+Z then Enter on Windows), redirect a file into
+it, or give it with `-e`:
+
+```
+$ ticpak error < error.txt
+map: the sources rebuilt (-m=max); they match mygame.tic
+
+enemies.lua:13: attempt to index a nil value (field 'target')
+stack traceback:
+	enemies.lua:13: in upvalue 'chase'
+	enemies.lua:23: in function 'enemies.update_all'
+	main.lua:16: in function 'TIC'
+
+source: enemies.lua:13
+    local dx = enemy.target.x - enemy.x
+```
+
+Every location becomes `file:line` and every short name its original. A
+minified line holds several source lines, so the name the message quotes
+picks out which one: `d` occurs once on line 11, on what was
+`enemies.lua:13`. A traceback frame is found the same way, by the call on
+its line to the frame above. When nothing picks out one line (two calls to
+the same function on one bundle line, say) it gives the range,
+`main.lua:15-16`.
+
+It finds the cart as `check` does (`<name>.tic` beside `main.lua` or in
+`dist/`; `-o` and `-n` for another), and needs its sources. The cart's
+`-- ticpak:` line says how it was built, and minifying is deterministic, so
+ticpak rebuilds the sources the same way in memory and checks that the
+result is the cart's code. A folder build's
+[`<name>.minify.json`](#the-decode-maps-nameminifytxt-and-nameminifyjson)
+is used instead when it is that cart's. If the sources changed since the
+build, it says so: the translation is then a best guess, so decode with the
+sources as they were (check out the release), or rebuild and reproduce the
+error. A change the minifier removes anyway (comments, unused code) still
+matches, and the lines then refer to the files as they are now.
+
+`-m` gives the options when the cart has no `-- ticpak:` line (built before
+0.3.4) or isn't there at all; it is then decoded against a fresh build.
+Locations in other chunks are left as they are. It works for any build,
+unminified ones too.
 
 ### The minifier on its own
 
@@ -408,7 +472,7 @@ note: the last build used -m; this command asks for -m=comments
 cart size: 110K
 code: 41K (37%)
 assets: 69K (63%)
-code limit: 41K / 64K (64% used, 36% free)
+code limit: 41K / 512K (8% used, 92% free)
 original code size: 151K (73% reduction with minify: default)
 ```
 
@@ -416,14 +480,23 @@ original code size: 151K (73% reduction with minify: default)
 - **code** and **assets** are its code and its asset sections (tiles,
   sprites, map, sound, palette, cover, ...), each as a share of the file.
   They don't add up to exactly 100%, because each section has a 4-byte header.
-- The **code limit** line measures the code against the free TIC-80
-  editor's 64K. Past it the line adds `- over the free editor's limit, fine
-  on PRO (up to 512K)`.
+- The **code limit** line measures the code against TIC-80's 512K code
+  limit ([TIC-80's limits](#tic-80s-limits)). From 90% it turns yellow and
+  adds `- close to TIC-80's code limit`. At the limit it turns red and says
+  `- over TIC-80's code limit`, and the check fails. A build never gets
+  that far, because `bundle` stops first. The colours show only in a
+  terminal.
 - **original code size** is the code's size before minification and the
   saving, with the options used (`(73% reduction with minify: default)`), or `not
   minified`. The options come from the cart's `-- ticpak:` line, so `check`
   shows them too. A cart built before ticpak 0.3.4 has no such line, and
   then only the size and the saving show.
+- With more than 64K of code, a last line says that editing it in TIC-80
+  needs Pro. The cart still plays in every TIC-80:
+
+  ```
+  info: code over 64K needs TIC-80 PRO to edit it in TIC-80 (the cart plays in every TIC-80)
+  ```
 
 By default the summary, the status lines and any error or limit violation are
 all ticpak prints. `--verbose` adds the progress lines, every size, anything
@@ -570,10 +643,38 @@ In interactive mode it first offers to add them, with a default for each:
 `script` is always `lua`. Placeholders are replaced in place, missing tags are
 added after the header's last line, and the file keeps its line endings.
 
+## TIC-80's limits
+
+| | Limit | What ticpak does |
+|---|---|---|
+| Code | 512K: 524,287 bytes, in every TIC-80 build | `bundle` stops on code at or over it, before booting. `check` fails a `.tic` over it. The summary turns yellow from 90%. |
+| Code over 64K | Plays everywhere. Only editing it in TIC-80 needs Pro. | The summary ends with an `info:` line, and the full report has an `INFO (non-PRO)` line. |
+| Asset sections | Their own sizes (`MAP` 32,640 bytes, `SPRITES` 8,192, ...) in each of 8 banks | `check` fails any section over its limit. |
+| Asset banks 1-7 | Load with `sync()`. Every build reads them; only editing them needs Pro. | An `INFO (non-PRO)` line, plus a warning when the code never calls `sync()` |
+| `.tic` file | None | Nothing |
+
+**Code over 64K plays everywhere.** That includes the free build, the web
+player, tic80.com and the `export html`/`export win` builds. The free
+TIC-80's code editor stops at 64K, so editing more than that in TIC-80
+needs Pro. Players don't need it. tic80.com bears this out: in October 2026,
+108 of its 4,630 carts had more than 64K of code, up to 511K, and 67 were
+`.tic` files over 256K, up to 1 MB.
+
+**How TIC-80 splits the code into banks.** A `.tic` stores code in chunks of
+64K at most. When TIC-80 saves a cart (ticpak runs TIC-80 Pro's `save`), it
+splits code longer than that into as many 64K `CODE` chunks as it needs, up
+to 8. The start of the code goes in the highest-numbered chunk and the end
+in chunk 0. When it loads a cart, TIC-80 joins them back into one program.
+These code banks are only storage. Unlike asset banks, `sync()` never swaps
+them, and your code doesn't change to use them. The full report lists them
+as `CODE part 1`, `CODE part 2`, ... in program order. The 512K limit is
+those 8 chunks of 64K, less one byte for the end of the text.
+
 ## Minification
 
-The free TIC-80 editor holds 64K of code, so a large game may need its code
-shrunk. Without `-m` the bundle is not minified. `-m` on its own applies the
+Minification makes the code smaller: it keeps a large game inside the 512K
+limit, under 64K if you want to edit it in the free TIC-80, or just
+downloading faster. Without `-m` the bundle is not minified. `-m` on its own applies the
 `default` options, every option but `rename-functions` and `rename-tables`;
 `-m=max` applies every option; `-m=OPTION,...` applies only those (`default`
 and `max` can be listed too: `-m=default,rename-functions,rename-tables` is
@@ -583,13 +684,13 @@ and `max` can be listed too: `-m=default,rename-functions,rename-tables` is
 |---|---|
 | `comments` | removes comments (keeps the metadata header and asset sections); nothing else changes |
 | `rename-vars` | renames variables to the shortest free names (1-2 letters) |
-| `rename-functions` | renames functions to the shortest free names too. Not in `default`: error messages then show the short names, so you need the [decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson) to read them. Table fields and methods (`M.update`, `obj:draw`) are `rename-tables`' |
+| `rename-functions` | renames functions to the shortest free names too. Not in `default`: error messages then show the short names, so you need [`ticpak error`](#errors-from-the-packaged-cart) to read them. Table fields and methods (`M.update`, `obj:draw`) are `rename-tables`' |
 | `rename-tables` | renames table keys, fields and methods alike (`obj.speed`, `M.update`, `{hp=3}`), to the shortest free names too: one new name per key, everywhere. Library keys (`math.floor`, `s:sub`), metamethods, keys also written as a string, and keys a string built at runtime could spell keep their names. It renames only when an analysis of the whole program proves that safe; when it can't (say a `pairs` loop prints its keys), no key is renamed and the report says why ([details](docs/minify.md#table-keys-rename-tables)). Not in `default`: error messages then show short field and method names |
 | `constants` | inlines constant values and removes the constants |
 | `whitespace` | removes extraneous whitespace and newlines, packing lines to 120 columns |
 | `extra` | everything else: folds constant expressions (`2*8` → `16`), removes unreachable code and anything nothing uses, call sugar (`f("x")` → `f"x"`), short local aliases for heavily used API functions (`spr`, `math.floor`, ...), shares strings and numbers written several times through one local each (only where that saves space), and merges adjacent `local` statements |
 
-On one 20-module game (code characters; the free limit is 65,536):
+On one 20-module game (code characters):
 
 | Minification | Code |
 |---|---|
@@ -607,12 +708,13 @@ another 2.3–11.4% off seven games (7.1% overall); it renamed nothing in an
 eighth, which reads `load`.
 
 With a [folder output](#output), every option past `comments` also writes
-two files you need to decode a runtime error in the packaged cart:
-`<name>.minify.txt` (what each pass did) and `<name>.minify.json` (each
-output line's source `file:line`, and every renamed identifier). See
-[The decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson). A
-`.tic` or `.lua` on its own comes without them, so build to a folder
-(`-o dist/`) when you need to trace an error.
+two maps of what minification did: `<name>.minify.txt` (what each pass did)
+and `<name>.minify.json` (where each output line's tokens came from, and
+every renamed identifier). See
+[The decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson).
+[`ticpak error`](#errors-from-the-packaged-cart) translates a runtime error
+from any build, with or without them: it needs only the cart and its
+sources.
 
 **Write `-m=a,b` with `=`, or put `SOURCE` first.** In `-m path/main.lua` the
 path would be read as the option list; ticpak says so if it happens.
@@ -742,7 +844,7 @@ headless there, twice:
 
 Every TIC-80 can load the `.tic`: the free build, the web player and
 tic80.com. Upload it, or send it to anyone with TIC-80. The `.lua` (from a
-folder build or `-o NAME.lua`) is for reading and decoding errors, and for
+folder build or `-o NAME.lua`) is for reading, and for
 exports: load it in TIC-80 and run `export html <name>` or
 `export win <name>` for a web or native build (both need network access).
 
@@ -814,24 +916,26 @@ Past `comments`, minification changes line numbers and renames variables
 (and functions, with `rename-functions`, and table keys, with
 `rename-tables`), so an error from the packaged cart
 no longer points at your sources. A folder build (`-o dist/`) writes these two maps beside the bundle
-to translate them back. Say TIC-80 reports:
+to translate them back. [`ticpak error`](#errors-from-the-packaged-cart)
+reads `<name>.minify.json` (or makes the same map in memory), so you need
+the file itself only to decode by hand or with your own tools. It holds:
 
-```
-[string "-- title: My Game..."]:37: attempt to index a nil value (local 'b')
-```
-
-Line 37 is a line of the minified `<name>.lua`, and `b` is a renamed
-variable. With `rename-functions`, a function's name in the message, such as
-`attempt to call a nil value (global 'q')` or a traceback's `in function 'q'`,
-is decoded the same way. `<name>.minify.json` translates both:
-
-- `"lines"` maps each bundle line to the source line it came from. Look up
-  `"37"` and you get, say, `["enemies.lua", 112]`. Lines that ticpak added
-  itself map to `[null, 0]`.
-- `"renames"` lists every renamed identifier, such as
-  `{"new": "b", "old": "target", "kind": "local", "source": ["enemies.lua", 98]}`.
-  A short name can be reused in different scopes, so pick the entry whose
-  source is near the line you found. With `rename-tables`, a key in a
+- `"format"`: 2. `"build"`: the cart's `-- ticpak:` line (`"0.4.1 -m=max"`).
+  `"code"`: a hash of the cart's code, which tells whether the map is that
+  cart's.
+- `"lines"` maps each bundle line to the source line of its first token:
+  `"37"` gives, say, `["enemies.lua", 112]`. Lines that ticpak added itself
+  map to `[null, 0]`.
+- `"segments"` maps each bundle line to every place its tokens change source
+  line, `[column, file, line]` with 0-based columns: `"37": [[0,
+  "enemies.lua", 110], [24, "enemies.lua", 112], ...]`. The column of a name
+  in the error message gives its source line.
+- `"renames"` lists every renamed identifier, such as `{"new": "b", "old":
+  "target", "kind": "local", "source": ["enemies.lua", 98], "uses": [[37,
+  14], [41, 3]]}`. `source` is where it is declared; `uses`, for a variable,
+  its first and last use in the bundle as `[line, column]`. A short name is
+  reused, but only in places that never overlap, so the entry whose uses
+  hold the error's position is the one. With `rename-tables`, a key in a
   message (`(field 'q')`, `in method 'q'`) has an entry of kind `"field"`:
   a key has the same new name everywhere, so there is only one.
 
@@ -845,9 +949,8 @@ with its `file:line`. Read it when you want to know what happened to a
 particular name, or attach it when reporting a minifier bug. The file
 formats are described in [docs/minify.md](docs/minify.md#outputs).
 
-Without minification, or with `comments` only, there are no maps: open
-`<name>.lua` at the reported line. The nearest
-`package.preload["..."] = function(...)` above it names the module.
+Without minification, or with `comments` only, there are no map files, but
+`ticpak error` decodes those builds' errors all the same.
 
 ## AI agent skills
 
@@ -899,6 +1002,7 @@ new session, so it reads the new version.
 | `ticpak/header.py` | the metadata header: the output name, missing tags, filling them in |
 | `ticpak/console.py` | console output and the prompts (questionary or plain) |
 | `ticpak/check.py` | the `.tic` limit and header checker (`ticpak check FILE...`) |
+| `ticpak/errors.py` | `ticpak error`: finds the decode map for a cart (its map file, or a rebuild checked against it) and translates an error with it |
 | `ticpak/minify.py` | the minifier (`ticpak minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
 
 `scripts/update_reserved.py` refreshes the minifier's list of TIC-80 API
@@ -910,7 +1014,13 @@ names and library keys (which renaming must never take) from a TIC-80 binary.
 pip install -e ".[test]"             # lupa: a real Lua 5.3 for the tests
 python tests/options/test_options.py # every combination of minify options
 python tests/minify/run.py           # the minifier's fixtures and fuzzing
+python tests/error/test_error.py     # ticpak error on real Lua 5.3 errors
 ```
+
+`tests/error` gives small projects one bug each, makes each error both from
+the sources as written and from the packaged cart (loaded as TIC-80 loads
+it), and checks that `ticpak error` turns the second into the first under
+every minify preset.
 
 `tests/options` builds sample carts with every subset of minify options and
 runs the original and minified code side by side in Lua 5.3, comparing what

@@ -150,9 +150,9 @@ is the whole program. Write the game this way and every option stays
 available:
 
 - **Write for the reader, not for size.** Comments, indentation and long names
-  cost nothing in a minified cart. The 64 KB free-editor limit applies to the
-  *packaged* code, which is often less than half the source. Don't golf the
-  modules.
+  cost nothing in a minified cart. TIC-80's 512 KB code limit (64 KB to
+  edit without Pro) applies to the *packaged* code, which is often less than
+  half the source. Don't golf the modules.
 - **Avoid dynamic global access**: `_G`, `_ENV`, `load`, `loadstring`,
   `dofile`, `loadfile`, `rawget`, `rawset`, `rawequal`, `debug`, a
   `require` with a computed name, or `pcall(require, "m")`. Any of these

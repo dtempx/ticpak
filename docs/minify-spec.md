@@ -724,6 +724,16 @@ renaming (R13) runs between the fixpoint loop and the small passes (R13l).
   `file:line` (from `ticpak`'s origin map), but not its enclosing function.
   The source line is enough to find it. A table key renamed by R13 is kind
   `field`, at its first occurrence; it has the same new name everywhere.
+  Format 2 adds, for each output line, every column where its tokens change
+  source line (`segments`: a minified line holds several source lines, and
+  the column of a name in the error picks one out); for each renamed
+  variable, its first and last use in the output as (line, column) (`uses`:
+  variables sharing a short name have non-overlapping uses, R8, so a
+  position names one binding); and the cart's `-- ticpak:` line and a hash
+  of its code, so a map is never applied to another build. `ticpak error`
+  (`errors.py`) applies the map; it makes it in memory by rebuilding the
+  sources with the cart's own options when no map file matches, which relies
+  on the minifier being deterministic.
 - **h. Runtime:** standard library only for packaging, and under 5 s on
   wavynavy's ~150K-character bundle.
 

@@ -11,14 +11,13 @@ import sys
 
 from . import console                    # console.VERBOSE is read live (--verbose)
 from . import minify as minifier
-from .bundle import FREE_LIMIT, flag_options, minify_label
+from .bundle import flag_options, minify_label
 from .check import (check_tic, parse_tic, read_stamp, tic_code, CHUNK_RAM_LIMIT,
-                    CODE_CHUNKS, COVER_CHUNKS)
-from .console import detail, flat_line, fwd, show
+                    CODE_CHUNKS, CODE_LIMIT, COVER_CHUNKS, FREE_LIMIT)
+from .console import detail, flat_line, fwd, show, tint
 from .header import META_KEYS
 
-NEAR = 0.90           # the detail flags anything at or above this share of a limit
-TIC_FILE_LIMIT = 256 * 1024
+NEAR = 0.90           # anything at or above this share of a limit is flagged
 
 
 def flatten_report(text):
@@ -101,11 +100,13 @@ def write_report(t, text):
     print(f"report: {fwd(t.txt)}")
 
 
-def size_summary(tic, unminified=None):
+def size_summary(tic, unminified=None, colour=False):
     """The closing summary, as lines: the .tic's total size;
     its code and its assets with their shares of that total; the code against
-    the 64K free-editor limit; and, when known, the unminified code size and
-    the reduction (or `not minified`)."""
+    TIC-80's 512K code limit, yellow from NEAR and red at the limit (colour:
+    for the screen, when it shows colour); when known, the unminified code
+    size and the reduction (or `not minified`); and last, for code over 64K,
+    that editing it in TIC-80 needs PRO."""
     with open(tic, "rb") as f:
         data = f.read()
     chunks, _ = parse_tic(data)
@@ -116,13 +117,19 @@ def size_summary(tic, unminified=None):
     def share(n):
         return f"{100 * n / total:.0f}%" if total else "0%"
 
-    used = round(100 * code / FREE_LIMIT)
+    used = round(100 * code / CODE_LIMIT)
+    limit = f"code limit: {kb(code)} / {kb(CODE_LIMIT)}"
+    if code >= CODE_LIMIT:      # a .tic made elsewhere: TIC-80 cuts the code off
+        level, limit = "error", limit + f" ({used}% used) - over TIC-80's code limit"
+    elif code >= NEAR * CODE_LIMIT:
+        level = "warn"
+        limit += f" ({used}% used, {100 - used}% free) - close to TIC-80's code limit"
+    else:
+        level, limit = None, limit + f" ({used}% used, {100 - used}% free)"
     lines = [f"cart size: {kb(total)}",
              f"code: {kb(code)} ({share(code)})",
              f"assets: {kb(asset)} ({share(asset)})",
-             f"code limit: {kb(code)} / {kb(FREE_LIMIT)}"
-             + (f" ({used}% used) - over the free editor's limit, fine on PRO (up to 512K)"
-                if code > FREE_LIMIT else f" ({used}% used, {100 - used}% free)")]
+             tint(limit, level) if colour else limit]
     stamp = read_stamp(tic_code(data, chunks))
     if stamp:               # built by ticpak 0.3.4+: it says how it was minified
         options = flag_options(stamp[1])
@@ -139,6 +146,9 @@ def size_summary(tic, unminified=None):
                      f" ({100 * (1 - code / unminified):.0f}% reduction)")
     elif unminified is not None:
         lines.append("not minified")
+    if code > FREE_LIMIT:
+        lines.append("info: code over 64K needs TIC-80 PRO to edit it in TIC-80"
+                     " (the cart plays in every TIC-80)")
     return lines
 
 
@@ -155,6 +165,7 @@ def check_summary(t, unminified=None, full=False, tic=None):
     with contextlib.redirect_stdout(buf):
         ok = check_tic(tic)
     summary = size_summary(tic, unminified)
+    shown = size_summary(tic, unminified, colour=True)
     saved = []
     if t.savings is not None:
         groups, sv, options = t.savings
@@ -165,7 +176,7 @@ def check_summary(t, unminified=None, full=False, tic=None):
     if full and console.VERBOSE:         # `check --verbose`: the whole check report
         print(f"check:  {show(tic)}")
         print(buf.getvalue(), end="")
-        print("\n".join(summary))
+        print("\n".join(shown))
         write_report(t, report)
         if not ok:
             sys.exit(1)
@@ -177,15 +188,12 @@ def check_summary(t, unminified=None, full=False, tic=None):
     code = sum(size for name, _, size, _ in chunks if name in CODE_CHUNKS)
     total = len(data)
     where = show(tic) if tic == t.tic else "the .tic (not kept)"
-    detail(f"check:  {where} {total:,} bytes ({100 * total / TIC_FILE_LIMIT:.0f}%"
-           f" of 256 KB); code {code:,} chars ({100 * code / FREE_LIMIT:.0f}% of the"
-           " 64 KB free-editor limit)")
+    detail(f"check:  {where} {total:,} bytes; code {code:,} chars"
+           f" ({100 * code / CODE_LIMIT:.0f}% of TIC-80's {CODE_LIMIT // 1024} KB code limit)")
 
     near = []
-    if total >= NEAR * TIC_FILE_LIMIT:
-        near.append(f"file {100 * total / TIC_FILE_LIMIT:.0f}%")
-    if code >= NEAR * FREE_LIMIT:
-        near.append(f"code {100 * code / FREE_LIMIT:.0f}%")
+    if code >= NEAR * CODE_LIMIT:
+        near.append(f"code {100 * code / CODE_LIMIT:.0f}%")
     for name, bank, size, _ in chunks:
         limit = CHUNK_RAM_LIMIT.get(name)
         # a cover is always a full 240x136 image: its 100% is no warning
@@ -203,7 +211,7 @@ def check_summary(t, unminified=None, full=False, tic=None):
         print("check:  all checks OK" if ok else "check:  VIOLATIONS FOUND")
     for line in saved:
         detail(line)
-    print("\n".join(summary))
+    print("\n".join(shown))
     write_report(t, report)
     if not ok:
         sys.exit(1)

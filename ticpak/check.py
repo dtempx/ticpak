@@ -2,8 +2,9 @@
 """Check a TIC-80 .tic binary cart against machine limits.
 
 Parses the .tic chunk stream (format verified against TIC-80 source cart.c)
-and reports every chunk's size vs its RAM region maximum, code budget usage,
-which of the 8 memory banks carry data, total file size, and whether the cart
+and reports every chunk's size vs its RAM region maximum, the code against
+TIC-80's 512 KB code limit (over it is a failure), which of the 8 memory
+banks carry data, total file size, and whether the cart
 carries a cover screenshot (a bank-0 SCREEN chunk — the `-- <SCREEN>` section
 of a text cart; a missing one is a warning, not a failure). It also checks the cart's metadata
 header, the `-- title:` / `-- author:` ... comments at the top of the code
@@ -23,10 +24,13 @@ bundle can be checked with the same rule:
 Banks and PRO. Every TIC-80 build's cart loader reads all 8 banks, and sync()
 works in every build: TIC_BANKS is 8 unconditionally in tic.h, and neither
 cart.c's loader nor core.c's tic_api_sync has a TIC80_PRO check (read in the
-upstream source 2026-09-28, not yet confirmed on a live free/web player).
-What PRO adds is authoring: the editors' bank switcher, a code editor past
-64 KB, and text-format .lua carts. So code over 64 KB and data in banks 1-7
-are reported as INFO lines marked (non-PRO), never as warnings or failures.
+upstream source 2026-09-28). What PRO adds is authoring: the editors' bank
+switcher, a code editor past 64 KB, and text-format .lua carts. So code over
+64 KB and data in banks 1-7 are reported as INFO lines marked (non-PRO),
+never as warnings or failures. tic80.com bears this out (surveyed
+2026-10-08): 108 of its 4,630 carts have over 64 KB of code, up to 511 KB,
+and 67 are .tic files over 256 KB, up to 1 MB, so the file size has no
+limit either.
 
 Chunk header layout (little-endian u32):
   bits 0-4:   type (5 bits, ChunkType enum)
@@ -70,6 +74,8 @@ COVER_CHUNKS = ("SCREEN", "COVER_DEP")
 # never swapped by sync(). The .tic file stores it in 64 KB CODE chunks whose
 # 3-bit "bank" field is only the chunk's position (cart.c), and the loader joins
 # them back together. 64 KB is the free editor's cap; PRO edits up to 512 KB.
+# The buffer is a C string, so the code itself must be at least a byte shorter:
+# loading a longer .lua cuts it off silently (project.c: loadTextSection).
 FREE_LIMIT = 65536
 CODE_LIMIT = 8 * FREE_LIMIT
 BANKS = 8
@@ -260,10 +266,10 @@ def report_banks(usage, code_banks=(), code_size=0, code=None, quiet=False):
         nb = len(code_banks)
         split = f", stored as {nb} 64 KB chunks" if nb > 1 else ""
         print(f"        code     {code_size:,} chars{split} (one program, not banked;"
-              f" limit {CODE_LIMIT // 1024} KB with PRO, {FREE_LIMIT // 1024} KB without)")
-    if code_size > FREE_LIMIT:
-        print(f"  INFO  (non-PRO) code is {code_size:,} chars, over the 64 KB free-editor"
-              " cap; fine on PRO, and every build's player loads it")
+              f" limit {CODE_LIMIT // 1024} KB)")
+    if FREE_LIMIT < code_size < CODE_LIMIT:
+        print(f"  INFO  (non-PRO) code is {code_size:,} chars, over 64 KB: editing it in"
+              " TIC-80 needs PRO; every build's player loads it")
     extra = [b for b in used if b > 0]
     if extra:
         print(f"  INFO  (non-PRO) bank{'s' if len(extra) > 1 else ''} {bank_ranges(extra)}"
@@ -348,9 +354,10 @@ def check_tic(path, quiet=False):
             print("  WARN  no SCREEN chunk - the cart has no cover screenshot"
                   " (press F7 in-game to capture one, then save)")
 
-    if total > 256 * 1024:
+    if code_size >= CODE_LIMIT:
         if not quiet:
-            print(f"  OVER  total file {total:,} bytes exceeds 256 KB")
+            print(f"  OVER  code {code_size:,} bytes: TIC-80 holds"
+                  f" {CODE_LIMIT - 1:,} at most ({CODE_LIMIT // 1024} KB)")
         ok = False
 
     if not quiet:

@@ -54,8 +54,8 @@ applies. This module's API takes the same comma-separated options and presets
 
 `rename-functions` is left out of `default` because it costs readable error
 messages: TIC-80 reports `attempt to call a nil value (global 'q')` and
-tracebacks name `function 'q'`, which the decode map turns back into source
-names. What it saves depends on the code. On the 8 ports it took 1.9–12.1% off
+tracebacks name `function 'q'`, which `ticpak error` (with the decode map)
+turns back into source names. What it saves depends on the code. On the 8 ports it took 1.9–12.1% off
 the `default` output: little where functions live in module tables
 (`M.update` is a field, which only `rename-tables` renames), most where a game
 is written as many global functions with long names.
@@ -135,8 +135,9 @@ key usually comes from a `pairs` loop, and the string from `..`,
 `rename-tables` off to keep them all.
 
 Error messages and tracebacks show the new names (`attempt to index a nil
-value (field 'q')`, `in method 'b'`). The [decode map](#outputs) lists each
-renamed key as kind `field`, and a key has the same new name everywhere.
+value (field 'q')`, `in method 'b'`); `ticpak error` turns them back. The
+[decode map](#outputs) lists each renamed key as kind `field`, and a key has
+the same new name everywhere.
 `pairs` may also visit a table's keys in another order, since the new keys
 hash differently. Lua 5.3 already varies that order from run to run, so code
 that depends on it is fragile anyway.
@@ -372,13 +373,24 @@ A folder build (`ticpak bundle -o dist/`) with any `--minify=` option past
     (see [Table keys](#table-keys-rename-tables)), and the keys kept because
     they are also a string or a built key could spell them;
   - the functions, modules, names and comments kept by `NOMINIFY`.
-- **`dist/<name>.minify.json`**, for decoding an error from the packaged cart:
+- **`dist/<name>.minify.json`**, for decoding an error from the packaged cart
+  (`ticpak error` reads it, or makes the same map in memory; see the README's
+  "Errors from the packaged cart"). Format 2:
+  - `"build"` is the cart's `-- ticpak:` line, and `"code"` a hash of its
+    code (`sha1:` of the code above the asset sections, LF line endings,
+    trailing whitespace dropped), to tell which cart the map is for;
   - `"lines"` maps each output line to the source file and line of its first
     token (TIC-80 reports `[string "…"]:37:`, so look up `"37"`);
+  - `"segments"` maps each output line to `[column, file, line]` for every
+    place its tokens change source line (0-based columns), so the column of
+    a name the error quotes gives its source line;
   - `"renames"` lists every renamed identifier (variables, with
     `rename-functions` functions, and with `rename-tables` table keys, kind
     `field`) with its original name and source line. A key's entry is its
-    first occurrence: a key has the same new name everywhere.
+    first occurrence: a key has the same new name everywhere. A variable's
+    entry also has `"uses"`, its first and last use in the output as
+    `[line, column]`: variables sharing a short name never overlap, so the
+    one whose uses hold the error's position is the one.
 
 ### What each option saved
 
