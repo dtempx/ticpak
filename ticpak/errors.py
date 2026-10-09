@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`ticpak error`: a runtime error from a packaged cart, translated back to
+"""`ticpak decode`: a runtime error from a packaged cart, translated back to
 the sources.
 
 TIC-80 reports a line of the bundle, `[string "-- title: ..."]:37:`, and once
@@ -13,10 +13,18 @@ The map is a folder build's <name>.minify.json when it matches the cart,
 else made in memory: the sources rebuilt with the cart's own -m (from its
 `-- ticpak:` line; the minifier is deterministic) and checked against the
 cart's code.
+
+The error text comes from the clipboard (copied from TIC-80's console, which
+breaks it into 40-column rows: unwrap), a log of TIC-80's output (its last
+error: last_error), or as it runs (`ticpak debug`: Stream).
 """
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
+import time
 
 from . import __version__
 from . import minify as minifier
@@ -44,6 +52,39 @@ FUNC_RE = re.compile(r"((?:bad argument #\d+ to|calling) )'([^']+)'")
 KIND = {"local": "local", "upvalue": "local", "global": "global", "field": "field",
         "method": "field"}
 ARITH = {"+", "-", "*", "/", "//", "%", "^", "&", "|", "~", "<<", ">>"}
+# A traceback's lines after the message (luaL_traceback: each frame tabbed in)
+TRACE_RE = re.compile(r"^[ |]*(stack traceback:|\t)")
+
+# TIC-80's console rows (TIC80_WIDTH / TIC_FONT_WIDTH), and the characters it
+# breaks a line after (console.c's iswrap)
+CONSOLE_WIDTH = 40
+WRAP_CHARS = " \t\n\r\f\v|"
+
+
+def unwrap(text):
+    """Text copied from TIC-80's console, its lines whole again. The copy
+    ends every 40-column row with a newline, and a line goes on to the next
+    row (console.c's consolePrintOffset) when it fills the row, or before a
+    character when the rest of its word (up to a space or |) is shorter
+    than a row but would reach the edge: so after a space or | when the
+    next word would not fit, and inside a word of 40 or more, leaving its
+    last 39 characters for the next row. Text with a longer line was not
+    copied from the console: it is left as it is."""
+    rows = text.replace("\r\n", "\n").split("\n")
+    if max(map(len, rows)) > CONSOLE_WIDTH:
+        return text
+    out = [rows[0]]
+    for prev, row in zip(rows, rows[1:]):
+        word = len(re.match(r"[^ \t\n\r\f\v|]*", row).group())
+        if prev[-1:] in tuple(WRAP_CHARS):      # between words
+            wrapped = 0 < word < CONSOLE_WIDTH and len(prev) + word >= CONSOLE_WIDTH
+        else:                                   # inside one
+            wrapped = word == CONSOLE_WIDTH - 1
+        if prev and (len(prev) == CONSOLE_WIDTH or wrapped):
+            out[-1] += row
+        else:
+            out.append(row)
+    return "\n".join(out)
 
 
 def calls(prev, nxt):
@@ -247,10 +288,11 @@ def decode(text, dec):
 
     # Where each line is: a message by the name it quotes; a frame by the
     # call, on its line, to the frame above it (the function it called).
-    above = None
+    above = last_msg = None
     for i, it in enumerate(items):
         it["cols"] = []
         if it["type"] == "msg":
+            last_msg = it
             msg = lines[i][it["at"]:]
             test = context(msg)
             m = VAR_RE.search(msg)
@@ -272,6 +314,11 @@ def decode(text, dec):
                 if call:
                     it["cols"] = dec.find(it["line"], call[1], call[0], calls)
                     above["caller"] = (it["line"], it["cols"])
+                elif last_msg and last_msg["line"] == it["line"]:
+                    # only nameless C frames (`[C]: in metamethod '__index'`)
+                    # between it and the message: the error's own frame
+                    it["cols"] = last_msg["cols"]
+            last_msg = None
         if it["type"] != "text":                     # "stack traceback:" in between
             above = it
     # A message that names nothing (error("...")) is where the frame below
@@ -354,7 +401,7 @@ def find_map(t, options=None):
             raise SystemExit(f"ticpak: {show(t.output)} has no `-- ticpak:` line (built"
                              " before ticpak 0.3.4?) - give -m with the options it was"
                              " built with")
-        options = flag_options(stamp[1])
+        options = flag_options(stamp[1], stamp[0])
     flag = minify_flag(options) or "no -m"
     if code is not None and t.map_json and os.path.isfile(t.map_json):
         try:
@@ -393,3 +440,151 @@ def source_line(cart_dir, where):
     except OSError:
         return None
     return lines[n - 1].rstrip() if 0 < n <= len(lines) else None
+
+
+def source_note(cart_dir, first):
+    """The `source:` lines after a decoded error: its source line's text."""
+    line = source_line(cart_dir, first) if first else None
+    return "" if line is None else f"\n\nsource: {first[0]}:{first[1]}\n    {line.strip()}"
+
+
+def is_message(line):
+    """Does the line start an error: a location that is not a traceback's?"""
+    return bool(LOC_RE.search(line)) and not TRACE_RE.match(line)
+
+
+def last_error(text, ours=None):
+    """The last error in a log of TIC-80's output: its message line and the
+    traceback after it. ours(chunk) picks the cart's errors, unless the log
+    has none. None when the log holds no error."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    starts = [i for i, ln in enumerate(lines) if is_message(ln)]
+    if ours:
+        starts = [i for i in starts
+                  if any(ours(m.group("chunk")) for m in LOC_RE.finditer(lines[i]))] or starts
+    if not starts:
+        return None
+    end = starts[-1] + 1
+    while end < len(lines) and TRACE_RE.match(lines[end]):
+        end += 1
+    return "\n".join(lines[starts[-1]:end])
+
+
+def clipboard_text():
+    """The clipboard's text, or None (empty, not text, or no way to read it):
+    Windows through user32, macOS through pbpaste, elsewhere wl-paste, xclip
+    or xsel, whichever is installed."""
+    if os.name == "nt":
+        return _windows_clipboard()
+    if sys.platform == "darwin":
+        commands = [["pbpaste"]]
+    else:
+        commands = [["xclip", "-selection", "clipboard", "-o"],
+                    ["xsel", "--clipboard", "--output"]]
+        if os.environ.get("WAYLAND_DISPLAY"):
+            commands.insert(0, ["wl-paste", "--no-newline"])
+    for cmd in commands:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            done = subprocess.run(cmd, capture_output=True, timeout=5,
+                                  stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            return done.stdout.decode("utf-8", errors="replace")
+    return None
+
+
+def _windows_clipboard():
+    import ctypes
+    from ctypes import wintypes
+    CF_UNICODETEXT = 13
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    if not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+        return None
+    for _ in range(10):                 # another program may have it open
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        return None
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        ptr = kernel32.GlobalLock(handle) if handle else None
+        if not ptr:
+            return None
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+class Stream:
+    """TIC-80's output as it runs (`ticpak debug`), passed through as it is
+    but for its errors, each decoded once it is whole: when a line that is
+    not part of its traceback follows, or the output pauses (idle). An error
+    outside the cart, or that can't be decoded, passes through too.
+
+    decoder() makes the Decoder the first time an error needs one (None: no
+    map; it says why itself); write(text) prints."""
+
+    def __init__(self, decoder, cart_dir, write):
+        self.make_decoder, self.cart_dir, self.write = decoder, cart_dir, write
+        self.dec = False                # not made yet
+        self.error = []                 # the error being read, line by line
+        self.partial = ""               # output since the last newline
+
+    def feed(self, text):
+        self.partial += text.replace("\r", "")
+        *lines, self.partial = self.partial.split("\n")
+        for line in lines:
+            self.line(line)
+
+    def line(self, line):
+        if self.error and TRACE_RE.match(line):
+            self.error.append(line)
+            return
+        self.flush()
+        if is_message(line):
+            self.error = [line]
+        else:
+            self.write(line + "\n")
+
+    def idle(self):
+        """Nothing more for a moment: the error so far is all of it."""
+        if self.partial and (self.error and TRACE_RE.match(self.partial)
+                             or is_message(self.partial)):
+            self.line(self.partial)
+            self.partial = ""
+        self.flush()
+        if self.partial:
+            self.write(self.partial)
+            self.partial = ""
+
+    def close(self):
+        if self.partial:
+            self.line(self.partial)
+            self.partial = ""
+        self.flush()
+
+    def flush(self):
+        if not self.error:
+            return
+        text, self.error = "\n".join(self.error), []
+        if self.dec is False:
+            self.dec = self.make_decoder()
+        dec = self.dec
+        if dec and any(dec.ours(m.group("chunk")) for m in LOC_RE.finditer(text)):
+            out, first, _ = decode(text, dec)
+            text = out + source_note(self.cart_dir, first)
+        self.write(text + "\n")

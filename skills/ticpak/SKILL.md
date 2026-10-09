@@ -38,11 +38,13 @@ otherwise `check`.
 
 ## Rules for every action
 
-- **Always pass a command: `ticpak bundle`, `ticpak check` or `ticpak
-  error`.** A bare `ticpak` is interactive. With no terminal it refuses to run
+- **Always pass a command: `ticpak init`, `ticpak bundle`, `ticpak check`
+  or `ticpak decode`.** A bare `ticpak` is interactive. With no terminal it refuses to run
   and exits with status 2. The commands never prompt: anything missing
-  becomes an error message. (`ticpak error` reads the error from stdin
-  without `-e`: give it `-e TEXT` or redirect a file.)
+  becomes an error message. (Give `ticpak decode` the error with `-e TEXT`
+  or `--log FILE`. Without them it reads redirected stdin, then the
+  clipboard.) `ticpak debug` opens TIC-80's window and waits until it is
+  closed. Run it only when the user wants to play the cart.
   Don't pass `-q`: it prints nothing, so you'd have only the exit status
   to read.
 - **Find the tool.** Check that `ticpak --version` works. If it doesn't, use
@@ -53,8 +55,7 @@ otherwise `check`.
   files and minifying are `ticpak check FILE...` and `ticpak minify FILE`
   (stdout; flags `--comments`, `--rename-vars`, `--rename-functions`,
   `--rename-tables`, `--constants`, `--whitespace`, `--extra`, or `--max`
-  for all; none means every option but `--rename-functions` and
-  `--rename-tables`; a module's globals and table keys are left alone).
+  for all; none means every option but `--rename-tables`; a module's globals and table keys are left alone).
 - **Run from the folder holding `main.lua`** (ticpak also finds
   `src/main.lua`), or pass the cart's path as the first argument.
 - **The metadata header must be complete.** The comment block at the top of

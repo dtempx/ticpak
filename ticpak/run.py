@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Running TIC-80 for ticpak: find the Pro binary, capture a headless
-run's output, and boot the bundle alone then save the .tic.
+run's output, boot the bundle alone then save the .tic, and run a cart in
+its window passing its output on (`ticpak debug`).
 """
+import codecs
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 if os.name != "nt":                 # the pty route below is POSIX-only
@@ -41,7 +45,61 @@ def tic80_exe():
     for name in ("tic80", "tic80.exe"):
         if shutil.which(name):
             return shutil.which(name)
-    sys.exit("bundle: no TIC-80 Pro binary found - set $TIC80 to its path, or put tic80 on PATH")
+    sys.exit("ticpak: no TIC-80 Pro binary found - set $TIC80 to its path, or put tic80 on PATH")
+
+
+IDLE_SECONDS = 0.3      # `debug`: output this long quiet ends an error's traceback
+
+
+def play(cart, stream):
+    """`ticpak debug`: TIC-80 in its window, running cart (a .tic or .lua) until
+    it is closed. Everything it prints (its console mirrors to stdout: an
+    error and its traceback too) goes to stream.feed as it comes, and
+    stream.idle() when it pauses. Returns TIC-80's exit status (130 for
+    Ctrl+C, which stops it too)."""
+    cmd = [tic80_exe(), "--skip", os.path.abspath(cart)]
+    if os.name == "nt":                 # TIC-80 does not buffer its stdout
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL)
+        fd, close = p.stdout.fileno(), p.stdout.close
+    else:                               # a pty, as _run_tty: never block-buffered
+        fd, slave = pty.openpty()
+        p = subprocess.Popen(cmd, stdout=slave, stderr=slave, stdin=subprocess.DEVNULL,
+                             close_fds=True)
+        os.close(slave)
+        close = lambda: os.close(fd)    # noqa: E731
+    chunks = queue.Queue()
+
+    def reader():
+        while True:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:             # a pty reports its end so
+                data = b""
+            chunks.put(data)
+            if not data:
+                return
+    threading.Thread(target=reader, daemon=True).start()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    status = None
+    try:
+        while True:
+            try:
+                data = chunks.get(timeout=IDLE_SECONDS)
+            except queue.Empty:
+                stream.idle()
+                continue
+            if not data:
+                break
+            stream.feed(decoder.decode(data))
+    except KeyboardInterrupt:
+        p.terminate()
+        status = 130
+    stream.feed(decoder.decode(b"", final=True))
+    stream.close()
+    rc = p.wait()
+    close()
+    return rc if status is None else status
 
 
 def _run_tty(cmd, cwd, timeout):

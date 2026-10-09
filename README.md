@@ -138,10 +138,12 @@ Everything is a subcommand of `ticpak`:
 | Command | What it does |
 |---|---|
 | `ticpak` | interactive: status, or asks how to build |
+| `ticpak init` | start a new project: `main.lua` and a first module |
 | `ticpak bundle` | build and check the project's package |
 | `ticpak check` | check the project's built package |
 | `ticpak check FILE...` | check any `.tic` or `.lua` files you name |
-| `ticpak error` | translate a runtime error from the package back to your files, lines and names |
+| `ticpak debug` | run the package in TIC-80, its runtime errors translated back to your files, lines and names |
+| `ticpak decode` | translate a runtime error from the package (copied, or in a log) back to your files, lines and names |
 | `ticpak minify FILE` | the Lua 5.3 minifier on its own ([docs/minify.md](docs/minify.md)) |
 
 ## What your project looks like
@@ -180,6 +182,30 @@ function TIC() game_update() game_draw() end
 ticpak looks for `./main.lua`, then `./src/main.lua`, or takes the path you
 give it. Modules are loaded from the cart's own directory, by the names
 literally written in `require "..."`.
+
+### Starting a new project
+
+```
+ticpak init            # in the current folder
+ticpak init mygame     # in mygame/, made if missing
+```
+
+`init` writes two files and asks nothing:
+
+- **`main.lua`**, the cart: a complete metadata header, an entry stub
+  (`local game = require "game"` and the `BOOT`/`TIC` callbacks calling
+  it), and TIC-80's default palette as its one asset section. The header
+  takes the defaults [interactive mode](#when-the-header-is-incomplete)
+  offers: the folder's name as the title, your git `user.name` as the
+  author, the git `origin` URL (else `https://tic80.com`) as the site,
+  `MIT License` and version `0.1`. Edit them in `main.lua`.
+- **`game.lua`**, a sample module that returns a table with `init`,
+  `update` and `draw`, drawing the title on screen.
+
+If the folder already has a `main.lua` (or `src/main.lua`), `init` stops
+with a message and exit status 1, and writes nothing; likewise if `game.lua`
+is there. Run the new cart with `tic80 main.lua` from its folder, and
+package it with `ticpak bundle`.
 
 ### Asset sections
 
@@ -245,31 +271,35 @@ release. `main.lua` and the modules stay your sources.
 ## Usage
 
 ```
+ticpak init [FOLDER] [-q]
 ticpak [bundle | check] [SOURCE] [options]
 ticpak check FILE... [-q]
-ticpak error [SOURCE] [-o PATH] [-n NAME] [-m...] [-e TEXT]
+ticpak debug [SOURCE] [-o PATH] [-n NAME] [-m...]
+ticpak decode [SOURCE] [-o PATH] [-n NAME] [-m...] [-e TEXT | -l FILE]
 ticpak minify [options] FILE
 ```
 
 | Command | What it does | Asks questions? |
 |---|---|---|
 | *(none)* | interactive: shows the status, or asks how to build | yes, needs a terminal |
+| `init` | starts a new project: `main.lua` and `game.lua` ([above](#starting-a-new-project)) | never |
 | `bundle` | builds and checks, or does nothing when the cart is up to date | never |
 | `check` | checks the project's existing `.tic` without building | never |
 | `check FILE...` | checks exactly the files named ([below](#checking-any-file)) | never |
-| `error` | translates an error from the packaged cart back to the sources ([below](#errors-from-the-packaged-cart)) | never; reads the error from stdin without `-e` |
+| `debug` | runs the package in TIC-80's window until you close it, translating its errors as they happen ([below](#errors-from-the-packaged-cart)) | never |
+| `decode` | translates an error from the packaged cart back to the sources ([below](#errors-from-the-packaged-cart)) | never; at a terminal, asks you to paste the error when the clipboard holds none |
 | `minify FILE` | the minifier on its own ([below](#the-minifier-on-its-own)) | never |
 
-`bundle`, `check` and `error` never ask questions, so they are the forms for
-scripts, CI and AI agents. Anything missing is an error message saying what
-is needed.
+`init`, `bundle`, `check`, `debug` and `decode` never ask questions, so they are the forms for
+scripts, CI and AI agents (`debug` waits until TIC-80 is closed). Anything
+missing is an error message saying what is needed.
 
 | Option | Meaning |
 |---|---|
 | `SOURCE` | the cart, or a folder searched for `main.lua` then `src/main.lua` (default: the current folder); or [a module on its own](#a-module-on-its-own) |
 | `-f`, `--force` | `bundle` only: build even when the cart is up to date |
-| `-m`, `--minify` | minify with the `default` options: every option but `rename-functions` and `rename-tables` (see [Minification](#minification)) |
-| `-m=max`, `--minify=max` | minify with every option, `rename-functions` and `rename-tables` included: the smallest cart |
+| `-m`, `--minify` | minify with the `default` options: every option but `rename-tables` (see [Minification](#minification)) |
+| `-m=max`, `--minify=max` | minify with every option, `rename-tables` included: the smallest cart |
 | `-m OPTION,...`, `--minify=OPTION,...` | minify with only the listed options (`-m=a,b` and `-ma,b` work too) |
 | *(no `-m`)* | no minification: the inlined source, verbatim |
 | `-o`, `--output PATH` | what to write: `NAME.tic`, `NAME.lua`, or a folder (see [Output](#output)); default `<name>.tic` beside `main.lua` |
@@ -278,9 +308,11 @@ is needed.
 | `-q`, `--quiet` | print nothing; the exit status says how it went (0 OK, 1 failed or a violation, 2 a usage error). An error that stops ticpak still prints its one line to stderr. Needs a command; not with `--verbose` |
 | `-v`, `--version` | print the version |
 | `--verbose` | also show progress, the check's detail and what minification saved (`check --verbose`: the full check report) |
-| `-e`, `--error TEXT` | `error` only: the error message and traceback to translate (default: read from stdin) |
+| `-e`, `--error TEXT` | `decode` only: the error message and traceback to translate (default: stdin when redirected, else the clipboard, else a paste at the terminal) |
+| `-l`, `--log FILE` | `decode` only: translate the last error in `FILE`, a log of TIC-80's output |
 
 ```
+ticpak init mygame               # a new project in mygame/: main.lua and game.lua
 ticpak                          # interactive
 ticpak bundle                    # build + check, if anything changed
 ticpak bundle -f                 # build + check, always
@@ -300,7 +332,9 @@ ticpak bundle -o dist/           # dist/<name>.tic, .lua and .bundle.txt (the re
 ticpak bundle path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak bundle enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
-ticpak error < error.txt         # an error from the .tic, in your files and names
+ticpak debug                    # run the .tic in TIC-80, its errors in your files and names
+ticpak decode                   # the error copied from TIC-80's console, translated
+ticpak decode --log tic80.log   # the last error in a log of TIC-80's output
 ticpak minify enemies.lua        # one module, minified, to stdout
 ```
 
@@ -320,6 +354,35 @@ build's output instead: `ticpak check -o out/` checks `out/<name>.tic`, and
 `ticpak check -o mygame.lua` gives a bundle the text-cart check below.
 `bundle` doesn't look: without `-o` it always writes `<name>.tic` beside
 `main.lua`.
+
+Before the `.tic`, `ticpak check` looks at the sources:
+
+```
+modules: 3 required by main.lua
+OK       player    player.lua
+OK       lib.util  lib/util.lua
+MISSING  enemies   enemies.lua not found
+WARN     helpers   helpers.lua required by player.lua but not main.lua, so not packaged: add it to main.lua's requires
+unreferenced: 12 other .lua files not required by main.lua (not packaged)
+old/scrap1.lua
+...
+(+2 more)
+header: complete in main.lua
+```
+
+- **modules**: each module `main.lua` requires, `OK` or `MISSING`. A module
+  that only another module requires gets `WARN`: ticpak packages only what
+  `main.lua` requires, so that `require` fails in the `.tic`.
+- **unreferenced**: the other `.lua` files under `main.lua`'s folder that
+  nothing requires, the first 10 of them. Built bundles (a `-- ticpak:` line)
+  and `*.min.lua` files are left out.
+- **header**: whether `main.lua`'s metadata header is complete, else what is
+  missing. `check` reports it and goes on to the `.tic`, rather than stopping
+  as `bundle` does.
+
+A `MISSING` module or an incomplete header makes `check` exit with status 1,
+as a violation in the `.tic` does.
+
 `-r` writes the check's full report to a file, as for `bundle` (with no
 savings table: `check` doesn't minify). Give it files instead and it checks
 exactly those, printing the checker's full report for each (`-r` doesn't
@@ -349,12 +412,31 @@ stack traceback:
 	[string "-- title:  My Game..."]:14: in function 'TIC'
 ```
 
-`ticpak error` translates it back. Paste the message and its traceback into
-it (end with Ctrl+D, or Ctrl+Z then Enter on Windows), redirect a file into
-it, or give it with `-e`:
+`ticpak debug` and `ticpak decode` translate it back. `ticpak debug` runs the
+package in TIC-80's window and passes on everything TIC-80 prints (its
+console, `trace` included, goes to its standard output too), translating
+each error as it happens. Close the window, or press Ctrl+C, to stop it. An
+error it can't translate (from another chunk, or with no decode map) is
+passed on as it is.
+
+`ticpak decode` translates an error afterwards. Copy it in TIC-80's console:
+select the message and its traceback with the mouse, press Ctrl+C, then run
+`ticpak decode`. The console copies its 40-column rows with a newline after
+each; ticpak joins them back into the lines TIC-80 printed. It takes the
+error from the first of:
+
+1. `-e TEXT`: the error itself.
+2. `--log FILE`: the last error from the cart in a log of TIC-80's output
+   (`tic80 mygame.tic > tic80.log`).
+3. Standard input, when it is redirected (`ticpak decode < error.txt`).
+4. The clipboard, when it holds an error from a cart. This reads the system
+   clipboard (`pbpaste` on macOS; `wl-paste`, `xclip` or `xsel` on Linux).
+5. A paste at the terminal: end it with Ctrl+D, or Ctrl+Z then Enter on
+   Windows.
 
 ```
-$ ticpak error < error.txt
+$ ticpak decode
+error: the clipboard
 map: the sources rebuilt (-m=max); they match mygame.tic
 
 enemies.lua:13: attempt to index a nil value (field 'target')
@@ -375,8 +457,9 @@ its line to the frame above. When nothing picks out one line (two calls to
 the same function on one bundle line, say) it gives the range,
 `main.lua:15-16`.
 
-It finds the cart as `check` does (`<name>.tic` beside `main.lua` or in
-`dist/`; `-o` and `-n` for another), and needs its sources. The cart's
+Both find the cart as `check` does (`<name>.tic` beside `main.lua` or in
+`dist/`; `-o` and `-n` for another), and need its sources. (`debug` runs the
+cart as built, and says so when the sources have changed since.) The cart's
 `-- ticpak:` line says how it was built, and minifying is deterministic, so
 ticpak rebuilds the sources the same way in memory and checks that the
 result is the cart's code. A folder build's
@@ -398,7 +481,7 @@ unminified ones too.
 Each minify option is a flag of its own (`--comments`, `--rename-vars`,
 `--rename-functions`, `--rename-tables`, `--constants`, `--whitespace`,
 `--extra`); with none of them, the `default` options apply (every option but
-`--rename-functions` and `--rename-tables`), and `--max` applies every option.
+`--rename-tables`), and `--max` applies every option.
 
 ```
 ticpak minify enemies.lua > enemies.min.lua         # one module, the default options
@@ -456,7 +539,9 @@ with a folder, the `.tic`, with the `.lua` and the report beside it) is newer
 than `main.lua` and every module. `bundle` skips an up-to-date cart, so running it
 on every save is cheap; it still prints the summary, then a hint that repeats
 your command with `-f`, such as `hint: ticpak bundle -f -m -o dist/ to force
-rebuild`, and one with the matching `ticpak check`. Only file timestamps count, so after changing `-m` or upgrading
+rebuild`, and one with the matching `ticpak check`. `check` and `debug` on a
+cart not built yet stop (status 1) with the command that builds it, such as
+`hint: ticpak bundle -m to build`. Only file timestamps count, so after changing `-m` or upgrading
 ticpak, use `bundle -f`. When your `-m` differs from the one the output was
 built with (read from its `-- ticpak:` line), `bundle` says so, whether it
 rebuilds or not:
@@ -572,15 +657,15 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 ? Cart name (.tic): [mygame]
 ? Minification:
-  1) default  - every option but rename-functions and rename-tables (small, readable errors)  [default]
+  1) default  - every option but rename-tables (small)  [default]
   2) comments - remove comments only
-  3) max      - every option, rename-functions and rename-tables too (smallest cart)
+  3) max      - every option, rename-tables too (smallest cart)
   4) none     - no minification (the bundled source verbatim)
   5) choose individual minification options...
 ? Minify options (space toggles, enter accepts):
    1) [x] comments          remove comments (keeps the metadata header and asset blocks)
    2) [x] rename-vars       rename variables to the shortest free names (1-2 letters)
-   3) [ ] rename-functions  rename functions to the shortest free names too (error messages then show the short names)
+   3) [x] rename-functions  rename functions to the shortest free names too (error messages then show the short names)
    4) [ ] rename-tables     rename table fields and methods too, where an analysis proves it safe (error messages then show the short names)
    5) [x] constants         inline constant values and remove the constants
    6) [x] whitespace        remove extraneous newlines and whitespace
@@ -675,16 +760,15 @@ those 8 chunks of 64K, less one byte for the end of the text.
 Minification makes the code smaller: it keeps a large game inside the 512K
 limit, under 64K if you want to edit it in the free TIC-80, or just
 downloading faster. Without `-m` the bundle is not minified. `-m` on its own applies the
-`default` options, every option but `rename-functions` and `rename-tables`;
+`default` options, every option but `rename-tables`;
 `-m=max` applies every option; `-m=OPTION,...` applies only those (`default`
-and `max` can be listed too: `-m=default,rename-functions,rename-tables` is
-`-m=max`).
+and `max` can be listed too: `-m=default,rename-tables` is `-m=max`).
 
 | Option | What it does |
 |---|---|
 | `comments` | removes comments (keeps the metadata header and asset sections); nothing else changes |
 | `rename-vars` | renames variables to the shortest free names (1-2 letters) |
-| `rename-functions` | renames functions to the shortest free names too. Not in `default`: error messages then show the short names, so you need [`ticpak error`](#errors-from-the-packaged-cart) to read them. Table fields and methods (`M.update`, `obj:draw`) are `rename-tables`' |
+| `rename-functions` | renames functions to the shortest free names too. Error messages then show the short names, so you need [`ticpak decode`](#errors-from-the-packaged-cart) to read them. Table fields and methods (`M.update`, `obj:draw`) are `rename-tables`' |
 | `rename-tables` | renames table keys, fields and methods alike (`obj.speed`, `M.update`, `{hp=3}`), to the shortest free names too: one new name per key, everywhere. Library keys (`math.floor`, `s:sub`), metamethods, keys also written as a string, and keys a string built at runtime could spell keep their names. It renames only when an analysis of the whole program proves that safe; when it can't (say a `pairs` loop prints its keys), no key is renamed and the report says why ([details](docs/minify.md#table-keys-rename-tables)). Not in `default`: error messages then show short field and method names |
 | `constants` | inlines constant values and removes the constants |
 | `whitespace` | removes extraneous whitespace and newlines, packing lines to 120 columns |
@@ -697,8 +781,8 @@ On one 20-module game (code characters):
 | none | 95,731 |
 | `comments` | 47,773 |
 | `comments,whitespace` | 40,964 |
-| `-m` (`default`) | 29,053 |
-| `-m=default,rename-functions` | 27,346 |
+| `-m=comments,rename-vars,constants,whitespace,extra` | 29,053 |
+| `-m` (`default`: `rename-functions` too) | 27,346 |
 | `-m=max` (`rename-tables` too) | 24,324 |
 
 How much `rename-functions` adds depends on the code: about 2% for a game
@@ -712,7 +796,7 @@ two maps of what minification did: `<name>.minify.txt` (what each pass did)
 and `<name>.minify.json` (where each output line's tokens came from, and
 every renamed identifier). See
 [The decode maps](#the-decode-maps-nameminifytxt-and-nameminifyjson).
-[`ticpak error`](#errors-from-the-packaged-cart) translates a runtime error
+[`ticpak decode`](#errors-from-the-packaged-cart) translates a runtime error
 from any build, with or without them: it needs only the cart and its
 sources.
 
@@ -916,7 +1000,7 @@ Past `comments`, minification changes line numbers and renames variables
 (and functions, with `rename-functions`, and table keys, with
 `rename-tables`), so an error from the packaged cart
 no longer points at your sources. A folder build (`-o dist/`) writes these two maps beside the bundle
-to translate them back. [`ticpak error`](#errors-from-the-packaged-cart)
+to translate them back. [`ticpak decode`](#errors-from-the-packaged-cart)
 reads `<name>.minify.json` (or makes the same map in memory), so you need
 the file itself only to decode by hand or with your own tools. It holds:
 
@@ -950,7 +1034,7 @@ particular name, or attach it when reporting a minifier bug. The file
 formats are described in [docs/minify.md](docs/minify.md#outputs).
 
 Without minification, or with `comments` only, there are no map files, but
-`ticpak error` decodes those builds' errors all the same.
+`ticpak decode` decodes those builds' errors all the same.
 
 ## AI agent skills
 
@@ -997,12 +1081,13 @@ new session, so it reads the new version.
 |---|---|
 | `ticpak/cli.py` | the command line, `--help`, the interactive questions, `main()` |
 | `ticpak/bundle.py` | finds the cart, resolves `-o` into the outputs to keep, inlines the modules, minifies, writes `<name>.lua` and the decode maps; a module on its own; the up-to-date check; the `-- <` guard |
-| `ticpak/run.py` | finds TIC-80 Pro, boots the bundle headless, saves `<name>.tic` |
+| `ticpak/run.py` | finds TIC-80 Pro, boots the bundle headless, saves `<name>.tic`; runs a cart in its window for `ticpak debug` |
 | `ticpak/report.py` | the summary, the `--verbose` detail (the minify savings table included), the `-r` report file |
 | `ticpak/header.py` | the metadata header: the output name, missing tags, filling them in |
+| `ticpak/scaffold.py` | `ticpak init`: a new project's `main.lua` and `game.lua` |
 | `ticpak/console.py` | console output and the prompts (questionary or plain) |
 | `ticpak/check.py` | the `.tic` limit and header checker (`ticpak check FILE...`) |
-| `ticpak/errors.py` | `ticpak error`: finds the decode map for a cart (its map file, or a rebuild checked against it) and translates an error with it |
+| `ticpak/errors.py` | `ticpak decode` and `debug`: finds the decode map for a cart (its map file, or a rebuild checked against it) and translates an error with it; reads the clipboard, rejoins text copied from TIC-80's console, finds a log's last error, and translates TIC-80's output as it runs |
 | `ticpak/minify.py` | the minifier (`ticpak minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
 
 `scripts/update_reserved.py` refreshes the minifier's list of TIC-80 API
@@ -1014,13 +1099,15 @@ names and library keys (which renaming must never take) from a TIC-80 binary.
 pip install -e ".[test]"             # lupa: a real Lua 5.3 for the tests
 python tests/options/test_options.py # every combination of minify options
 python tests/minify/run.py           # the minifier's fixtures and fuzzing
-python tests/error/test_error.py     # ticpak error on real Lua 5.3 errors
+python tests/error/test_error.py     # ticpak decode on real Lua 5.3 errors
 ```
 
 `tests/error` gives small projects one bug each, makes each error both from
 the sources as written and from the packaged cart (loaded as TIC-80 loads
-it), and checks that `ticpak error` turns the second into the first under
-every minify preset.
+it), and checks that `ticpak decode` turns the second into the first under
+every minify preset. It also checks where the error text comes from: text
+copied from TIC-80's console (laid out as `console.c` lays it out) rejoined,
+a log's last error, and TIC-80's output as `ticpak debug` reads it.
 
 `tests/options` builds sample carts with every subset of minify options and
 runs the original and minified code side by side in Lua 5.3, comparing what

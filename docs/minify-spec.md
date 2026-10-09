@@ -16,7 +16,8 @@ removing dead code, tree shaking unreferenced definitions, and renaming
 variables, and on request functions and table keys. Behaviour must stay
 identical, and the result must stay debuggable: each function starts on its
 own line, and unless `rename-functions` or `rename-tables` is chosen (I1b,
-I1c), function, field and method names survive.
+I1c), function, field and method names survive. The decode maps (R10g) turn
+renamed names back.
 
 **Out of scope:**
 - renaming the implicit `self`;
@@ -49,15 +50,15 @@ I1c), function, field and method names survive.
 ## 3. Interface
 
 - **I1. Mode.** Max mode is this spec's whole-program pipeline: every option
-  past `comments` runs it. Two presets name option sets (revised 2026-10-06):
-  - `default`: every option but the opt-in `rename-functions` and
-    `rename-tables`. It is `ticpak bundle --minify`, `ticpak minify` with no
+  past `comments` runs it. Two presets name option sets (revised 2026-10-06
+  and 2026-10-09):
+  - `default`: every option but the opt-in `rename-tables`. It is `ticpak bundle --minify`, `ticpak minify` with no
     option flags, and `mode="default"`.
   - `max`: every option. It is `ticpak bundle --minify=max`, `ticpak minify
     --max`, and `mode="max"` (the API's default).
 
   A preset can be listed with options
-  (`--minify=default,rename-functions,rename-tables` is `max`). When max mode
+  (`--minify=default,rename-tables` is `max`). When max mode
   was added, the minifier's earlier `none` and `default`
   modes kept their output byte for byte (checked against the pre-change
   baseline on wavynavy).
@@ -68,8 +69,8 @@ I1c), function, field and method names survive.
 - **I1b. The `rename-tables` option (added 2026-10-06).**
   `--minify=rename-tables` (`ticpak bundle`; `--rename-tables` for `ticpak
   minify`) turns on table key renaming (R13). Like every option, it implies
-  `comments`. It is **opt-in**, like `rename-functions` (I1c): `default`
-  leaves it out and `max` includes it. Error messages and tracebacks then
+  `comments`. It is **opt-in**: `default` leaves it out and `max` includes
+  it. Error messages and tracebacks then
   show short field and method names, and its guarantee rests on an analysis
   of how the program uses strings (R13h), not on Lua's semantics alone.
   Leaving it out is the only opt-out: there is no per-key one (decision O3,
@@ -77,9 +78,10 @@ I1c), function, field and method names survive.
   (I2): `rename-tables`.
 - **I1c. The rename options (added 2026-10-06).** `rename-vars` (named
   `rename` until 2026-10-06) renames variables (R8). `rename-functions`
-  renames function bindings too (R8j). It is **opt-in**: `default` leaves it
-  out, because error messages and tracebacks then show the short names, and
-  `max` includes it. Each implies `comments`. Pass names for `passes=` (I2):
+  renames function bindings too (R8j); error messages and tracebacks then
+  show the short names, which the decode maps (R10g) turn back. Both are in
+  `default` and `max` (`rename-functions` was opt-in until 2026-10-09). Each
+  implies `comments`. Pass names for `passes=` (I2):
   `rename-vars` and `rename-functions`.
 - **I2. Pass switches.** `passes=<list>` (API only) picks a subset of the
   max-mode passes: `fold,inline,dce,shake,rename-vars,rename-functions,
@@ -730,7 +732,7 @@ renaming (R13) runs between the fixpoint loop and the small passes (R13l).
   variable, its first and last use in the output as (line, column) (`uses`:
   variables sharing a short name have non-overlapping uses, R8, so a
   position names one binding); and the cart's `-- ticpak:` line and a hash
-  of its code, so a map is never applied to another build. `ticpak error`
+  of its code, so a map is never applied to another build. `ticpak decode`
   (`errors.py`) applies the map; it makes it in memory by rebuilding the
   sources with the cart's own options when no map file matches, which relies
   on the minifier being deterministic.
@@ -1105,3 +1107,8 @@ Tests live in `tests/minify/`: `run.py` (fold, bytecode, fixtures),
     text.
   - **Result:** 7.1% off the ports' `max` output (R13o); `difftest` 8/8
     identical.
+- **2026-10-09:** `rename-functions` moved into `default` at the owner's
+  request (I1, I1c), so `max` differs from `default` only by
+  `rename-tables`. Error messages from a `default` cart now show short
+  function names, which `ticpak decode` turns back; the size of a cart under
+  `default` is the old `default,rename-functions` (R8j f).

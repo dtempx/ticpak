@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for `ticpak error`: runtime errors from packaged carts, decoded back
+"""Tests for `ticpak decode`: runtime errors from packaged carts, decoded back
 to the sources.
 
     python tests/error/test_error.py
@@ -17,15 +17,17 @@ of the TIC-80 API:
     handler makes it (luaL_traceback), which gives
     `[string "-- title: ..."]:11: attempt to index ... (field 'd')`.
 
-`ticpak error` must turn the second into the first, for every minify preset:
+`ticpak decode` must turn the second into the first, for every minify preset:
 each line and name in the message and in every traceback frame.
 
   Map      the .minify.json a folder build writes (format 2): segments, the
            uses of each renamed variable, the code's hash
   Decode   each case under each preset, decoded == written
-  Command  `ticpak error`: -e and stdin, the map file or a rebuild, a cart
-           that no longer matches its sources, no cart, no location, the
-           options it rejects
+  Input    text copied from TIC-80's console rejoined, a log's last error,
+           TIC-80's output decoded as `ticpak debug` reads it
+  Command  `ticpak decode`: -e, stdin, the clipboard and --log, the map file
+           or a rebuild, a cart that no longer matches its sources, no
+           cart, no location, the options it rejects
 
 Needs lupa (pip install lupa); without it Decode and Command skip.
 """
@@ -410,9 +412,113 @@ def tic_file(path, code):
         f.write(struct.pack("<I", 5 | len(data) << 8) + data)
 
 
+def console_copy(text, width=40):
+    """The text printed to TIC-80's console then copied from it (select all,
+    Ctrl+C): console.c's consolePrintOffset lays it out in rows of `width`,
+    moving a word that would reach the edge to the next row, and
+    getSelectionText puts a newline between rows."""
+    rows, x = [[]], 0
+
+    def wrap(c):
+        return c == "|" or c.isspace()
+    for i, c in enumerate(text):
+        if c == "\n":
+            rows.append([])
+            x = 0
+            continue
+        if not wrap(c):
+            word = 0
+            while i + word < len(text) and not wrap(text[i + word]):
+                word += 1
+            if 0 < width - word <= x:
+                rows.append([])
+                x = 0
+        rows[-1].append(c)
+        x += 1
+        if x >= width:
+            rows.append([])
+            x = 0
+    return "\n".join("".join(r) for r in rows)
+
+
 def setUpModule():
     import warnings
     warnings.simplefilter("ignore", ResourceWarning)
+
+
+class TestInput(unittest.TestCase):
+    """Where the error text comes from: TIC-80's console (unwrap), a log
+    (last_error), its output as it runs (Stream)."""
+
+    def test_unwrap(self):
+        for text in ("", "short", "x" * 40, "x" * 40 + "\nnext", "x" * 39 + " y",
+                     "a | " * 30, "word " * 20 + "\n\n" + "y" * 85,
+                     '[string "-- title:  My Game..."]:37: attempt to index a nil'
+                     " value (field 'xy')\nstack traceback:\n\t[C]: in ?"):
+            with self.subTest(text=text):
+                self.assertEqual(errors.unwrap(console_copy(text)), text)
+
+    def test_unwrap_leaves_long_lines(self):
+        text = "x" * 41 + "\n" + "y" * 40 + "\nz"
+        self.assertEqual(errors.unwrap(text), text)
+
+    @NEEDS_LUA
+    def test_unwrap_cases(self):
+        for case in CASES:
+            for preset in ("none", "max"):
+                with self.subTest(case=case, preset=preset):
+                    packaged = built(case, preset)[0]
+                    self.assertEqual(errors.unwrap(console_copy(packaged)), packaged)
+
+    def test_last_error(self):
+        first = '[string "-- title: a"]:3: first\nstack traceback:\n\t[C]: in ?'
+        other = '[string "helper"]:9: not ours'
+        last = '[string "-- title: a"]:5: second\nstack traceback:\n\t[C]: in ?'
+        log = "\n".join(["boot", first, "trace", last, other, "after", ""])
+        self.assertEqual(errors.last_error(log), other)
+        self.assertEqual(errors.last_error(log, lambda c: c.startswith("-- title")), last)
+        self.assertEqual(errors.last_error(log, lambda c: False), other)
+        self.assertIsNone(errors.last_error("no errors\nhere"))
+
+    @NEEDS_LUA
+    def test_stream(self):
+        """Output passes through as it is, each error decoded once whole:
+        when other output follows, or when the output pauses."""
+        root = tempfile.mkdtemp(prefix="ticpak-error-")
+        self.addCleanup(shutil.rmtree, root, True)
+        bl = Built("index a field", M.ALL_OPTIONS, root)
+        dec = errors.Decoder(bundle.map_doc(bl.b), bl.code)
+        packaged = run_packaged(bl.code)
+        decoded = errors.decode(packaged, dec)[0]
+        note = errors.source_note(root, ("enemies.lua", 13))
+        made = []
+
+        def decoder():
+            made.append(1)
+            return dec
+        for tail in ("after\n", ""):
+            with self.subTest(tail=tail):
+                out = []
+                s = errors.Stream(decoder, root, out.append)
+                text = "loaded!\r\ntrace " + "\n" + packaged + "\n" + tail
+                for i in range(0, len(text), 7):     # in pieces, as a pipe reads
+                    s.feed(text[i:i + 7])
+                if not tail:
+                    self.assertNotIn(decoded.split("\n")[0], "".join(out))
+                s.idle()
+                self.assertEqual("".join(out),
+                                 "loaded!\ntrace \n" + decoded + note + "\n" + tail)
+        self.assertEqual(len(made), 2)
+        out = []
+        s = errors.Stream(lambda: None, root, out.append)
+        s.feed(packaged + "\n")
+        s.close()
+        self.assertEqual("".join(out), packaged + "\n")    # no map: as it is
+        out = []
+        s = errors.Stream(decoder, root, out.append)
+        s.feed('[string "helper"]:3: boom\npartial')
+        s.idle()
+        self.assertEqual("".join(out), '[string "helper"]:3: boom\npartial')
 
 
 class TestMap(unittest.TestCase):
@@ -607,6 +713,22 @@ class TestDecode(unittest.TestCase):
         self.assertEqual(errors.decode(quoted, dec)[0],
                          "\n".join("   | " + ln for ln in decoded.split("\n")))
 
+    def test_metamethod_frame(self):
+        """TIC-80's traceback can put a nameless C frame between the message
+        and the error's own frame (`[C]: in metamethod '__index'`): that
+        frame is still the message's line, not the whole function."""
+        packaged, decoded, _ = built("index a field", "max")
+        c_frame = "\t[C]: in metamethod '__index'"
+        insert = lambda t: t.replace("stack traceback:\n", "stack traceback:\n" + c_frame
+                                     + "\n", 1)                       # noqa: E731
+        root = tempfile.mkdtemp(prefix="ticpak-error-")
+        self.addCleanup(shutil.rmtree, root, True)
+        bl = Built("index a field", M.ALL_OPTIONS, root)
+        dec = errors.Decoder(bundle.map_doc(bl.b), bl.code)
+        out = errors.decode(insert(packaged), dec)[0]
+        self.assertEqual(out, insert(decoded))
+        self.assertIn("\n\tenemies.lua:13: in upvalue 'chase'\n", out)
+
     def test_line_not_in_cart(self):
         root = tempfile.mkdtemp(prefix="ticpak-error-")
         self.addCleanup(shutil.rmtree, root, True)
@@ -620,30 +742,32 @@ class TestDecode(unittest.TestCase):
 
 @NEEDS_LUA
 class TestCommand(unittest.TestCase):
-    """`ticpak error` from the command line."""
+    """`ticpak decode` from the command line."""
 
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="ticpak-error-cmd-")
         self.addCleanup(shutil.rmtree, self.root, True)
         self.main = write_project(self.root, project("index a field"))
 
-    def run_cmd(self, *argv, stdin=None):
-        """(exit status, stdout, stderr) of `ticpak error ...`."""
+    def run_cmd(self, *argv, stdin=None, tty=False, clipboard=None):
+        """(exit status, stdout, stderr) of `ticpak decode ...`: stdin
+        redirected from the text given, or a terminal (tty) the text is
+        pasted into; clipboard, the clipboard's text."""
         out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
         err = io.StringIO()
         status = 0
-        old_stdin = sys.stdin
-        if stdin is not None:
-            sys.stdin = io.StringIO(stdin)
+        old_stdin, old_clip = sys.stdin, errors.clipboard_text
+        sys.stdin = Terminal(stdin or "") if tty else io.StringIO(stdin or "")
+        errors.clipboard_text = lambda: clipboard
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                cli.main(["error", *argv])
+                cli.main(["decode", *argv])
         except SystemExit as e:
             status = e.code if isinstance(e.code, int) else 1
             if isinstance(e.code, str):
                 err.write(e.code)
         finally:
-            sys.stdin = old_stdin
+            sys.stdin, errors.clipboard_text = old_stdin, old_clip
         out.flush()
         text = out.buffer.getvalue().decode("utf-8").replace("\r\n", "\n")
         return status, text, err.getvalue()
@@ -757,6 +881,59 @@ class TestCommand(unittest.TestCase):
         _, out, _ = self.run_cmd(self.main, "-o", path, stdin=run_packaged(code))
         self.assertRegex(out, r"\n\tenemies\.lua:13: in upvalue 'chase'\n")
         self.assertIn("\n\tmain.lua:16: in function 'TIC'\n", out)
+
+    def test_clipboard(self):
+        """At a terminal the clipboard comes first, copied from TIC-80's
+        console (40-column rows); without an error in it, a paste."""
+        path, code = self.build_lua()
+        copied = console_copy(run_packaged(code))
+        status, out, _ = self.run_cmd(self.main, "-o", path, tty=True, clipboard=copied)
+        self.assertEqual(status, 0)
+        self.assertIn("error: the clipboard\n", out)
+        self.assertIn("enemies.lua:13: attempt to index a nil value (field 'target')", out)
+        status, out, err = self.run_cmd(self.main, "-o", path, tty=True, clipboard="hello",
+                                        stdin=copied)
+        self.assertEqual(status, 0)
+        self.assertIn("the clipboard holds no error from a cart: paste", err)
+        self.assertIn("(field 'target')", out)
+        status, _, err = self.run_cmd(self.main, "-o", path, clipboard=None)
+        self.assertEqual(status, 1)
+        self.assertIn("no error to translate", err)
+        status, out, _ = self.run_cmd(self.main, "-o", path, stdin=copied, clipboard="x")
+        self.assertNotIn("the clipboard", out)       # redirected stdin comes first
+        self.assertIn("(field 'target')", out)
+
+    def test_log(self):
+        """--log: the last error in a log of TIC-80's output."""
+        path, code = self.build_lua()
+        packaged = run_packaged(code)
+        earlier = packaged.replace("a nil value", "a number value", 1)
+        log = os.path.join(self.root, "tic80.log")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("TIC-80 tiny computer\nloaded!\n" + earlier + "\nrestarted\n"
+                    + packaged + "\n" + '[string "other"]:1: not this cart\nbye\n')
+        status, out, _ = self.run_cmd(self.main, "-o", path, "--log", log)
+        self.assertEqual(status, 0, out)
+        self.assertIn("error: the last error in", out)
+        decoded = errors.decode(packaged, errors.find_map(
+            bundle.Target(self.main, "game", path))[0])[0]
+        self.assertIn("\n" + decoded + "\n", out)
+        self.assertNotIn("restarted", out)
+        self.assertNotIn("number value", out)
+        status, _, err = self.run_cmd(self.main, "-o", path, "--log", log + ".missing")
+        self.assertEqual(status, 1)
+        self.assertIn("can't read", err)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parse_args(["decode", "--log", log, "-e", "x"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parse_args(["debug", "--log", log])
+
+
+class Terminal(io.StringIO):
+    """stdin at a terminal, the text given pasted into it."""
+
+    def isatty(self):
+        return True
 
 
 if __name__ == "__main__":

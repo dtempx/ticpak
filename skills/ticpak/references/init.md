@@ -1,7 +1,8 @@
 # ticpak init: set up a multi-file project
 
-`init` has no ticpak command. You set the project up by hand, then prove it
-with `ticpak bundle`. First look at the folder:
+`ticpak init` starts a new project; splitting or reviewing an existing one
+is done by hand. Either way, prove the result with `ticpak bundle`. First
+look at the folder:
 
 | The folder has | Do |
 |---|---|
@@ -76,15 +77,21 @@ function TIC() game_update() game_draw() end
 
 ## New project
 
-1. Ask for the title and a one-line description, and for `site`, `license`
-   and `version`. Offer ticpak's own defaults: the git `origin` URL,
-   `MIT License` and `0.1`.
-2. Write `main.lua` as in the layout above, requiring one module.
-3. Write that module, defining what the stub calls. For example, `game.lua`
-   with `game_init`, `game_update` and `game_draw`, where `game_draw` calls
-   `cls()` and prints the title.
-4. Add `*.tic` and `dist/` to `.gitignore`.
-5. Run `ticpak bundle -f` to prove the bundle boots on its own (see
+1. Run `ticpak init` in the project folder (or `ticpak init FOLDER`, which
+   makes the folder if missing). It never prompts. It writes `main.lua` (a
+   complete header, the stub `local game = require "game"` with `BOOT` and
+   `TIC` calling `game.init`, `game.update` and `game.draw`, and the default
+   `PALETTE` section) and `game.lua`, a module returning that table, which
+   draws the title. If a `main.lua`, `src/main.lua` or `game.lua` is there
+   already it stops with `ticpak: <path> already exists - ...`, exit status
+   1, and writes nothing: use the other rows of the table above instead.
+2. The header takes defaults: the folder's name as `title`, git
+   `user.name` as `author`, `<title> - a TIC-80 game` as `desc`, the git
+   `origin` URL (else `https://tic80.com`) as `site`, `MIT License` and
+   `0.1`. Ask the user for the title, a one-line description, `site`,
+   `license` and `version`, and edit those lines in `main.lua`.
+3. Add `*.tic` and `dist/` to `.gitignore`.
+4. Run `ticpak bundle -f` to prove the bundle boots on its own (see
    [bundle.md](bundle.md)), and tell the user how to run it while developing.
 
 ## Split a single-file cart
@@ -168,11 +175,11 @@ available:
   above a call) keeps just itself, for credits or licence lines. A blank
   line ends a comment block, and the word must stand alone (`NOMINIFY_X`
   doesn't count). A kept comment line must not start `-- <`.
-- Every TIC-80/Lua global is never renamed. Function names are renamed only
-  by the opt-in `rename-functions` option, and table fields and methods only
-  by the opt-in `rename-tables` (both in `-m=max`), so tracebacks stay
-  readable with a plain `-m`. A `NOMINIFY` comment on a function keeps its
-  name too.
+- Every TIC-80/Lua global is never renamed. Function names are renamed by
+  `-m` (the `rename-functions` option; `ticpak decode` turns tracebacks back
+  into source names), and table fields and methods only by the opt-in
+  `rename-tables` (in `-m=max`), so a plain `-m`'s tracebacks still name
+  fields and methods. A `NOMINIFY` comment on a function keeps its name too.
 - `rename-tables` gives a key the same new name everywhere and checks the
   whole program first: it keeps library keys, metamethods, keys also written
   as strings and keys a built string could spell (`t["sprite_" .. i]`). It

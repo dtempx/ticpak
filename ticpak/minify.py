@@ -21,8 +21,8 @@ a set - `comments,rename-vars`; an empty set is a passthrough:
                     remove unreachable code and anything nothing uses, call
                     sugar, alias heavily used API functions, share repeated
                     strings and numbers through locals, merge local statements
-Two presets: `default`, every option but rename-functions and rename-tables,
-and `max`, every option. Every option but `comments` works on the token stream,
+Two presets: `default`, every option but rename-tables, and `max`, every
+option. Every option but `comments` works on the token stream,
 so it removes comments too.
 
 Why no AST printer: luamin 1.0.4 (npm) re-prints expressions with Lua 5.1
@@ -65,11 +65,9 @@ OPTION_PASSES = {"constants": ("inline",), "rename-vars": ("rename-vars",),
                  "rename-functions": ("rename-functions",),
                  "rename-tables": ("rename-tables",), "extra": tuple(EXTRA_HELP)}
 ALL_OPTIONS = frozenset(OPTIONS)
-# `default`: every option but the opt-in ones: rename-functions costs readable
-# error messages (spec D11), and rename-tables both those and a guarantee that
-# rests on an analysis rather than Lua's semantics alone (spec R13). `max`:
-# every option.
-DEFAULT_OPTIONS = ALL_OPTIONS - {"rename-functions", "rename-tables"}
+# `default`: every option but the opt-in rename-tables, whose guarantee rests on
+# an analysis rather than Lua's semantics alone (spec R13). `max`: every option.
+DEFAULT_OPTIONS = ALL_OPTIONS - {"rename-tables"}
 PRESETS = {"default": DEFAULT_OPTIONS, "max": ALL_OPTIONS}
 
 
@@ -4575,8 +4573,7 @@ def minify(src, mode="max", whole_program=True, **opts):
     """Minify Lua source; returns the text.
 
     mode: option names, e.g. 'comments,rename-vars' (see the module
-    docstring), 'default' for every option but rename-functions and
-    rename-tables, 'max' for every option (whole-program optimisation,
+    docstring), 'default' for every option but rename-tables, 'max' for every option (whole-program optimisation,
     minify-spec.md), or '' for none (passthrough).
     whole_program=False treats src as a fragment (one module on its own):
     globals are then never inlined, removed or renamed.

@@ -15,7 +15,7 @@ after booting the bundle headless, and checks it. `<name>` is the header's
 
 Use a folder (`-o dist/`) whenever you need the bundle or the decode maps:
 to read the bundle or the minify report, or for `export html`/`export win`.
-Decoding an error needs neither: `ticpak error` works from the `.tic` alone
+Decoding an error needs neither: `ticpak decode` works from the `.tic` alone
 (see the end of this file). `-n` with
 `-o NAME.tic`/`NAME.lua` is an error: the file names itself.
 
@@ -57,17 +57,16 @@ can't be a `.tic`.
    | *(none)* | the source inlined verbatim; fails if a module has a column-0 `-- <` comment |
    | `-m=comments` | comments removed, line structure kept: a readable cart and a safe default |
    | `-m=comments,whitespace` | lines packed to 120 columns |
-   | `-m` | the `default` preset, every option but `rename-functions` and `rename-tables` (`comments,rename-vars,constants,whitespace,extra`): small, and error messages still name functions, fields and methods |
-   | `-m=max` | every option, `rename-functions` and `rename-tables` too: the smallest cart, but error messages show short function, field and method names (`ticpak error` turns them back, as below) |
+   | `-m` | the `default` preset, every option but `rename-tables` (`comments,rename-vars,rename-functions,constants,whitespace,extra`): small; error messages show short function names (`ticpak decode` turns them back, as below) but still name fields and methods |
+   | `-m=max` | every option, `rename-tables` too: the smallest cart, but error messages show short field and method names as well |
 
-   On a 20-module game these gave 96K, 48K, 41K, 29K and 24K characters of
+   On a 20-module game these gave 96K, 48K, 41K, 27K and 24K characters of
    code. Go further than `comments` only if the code is near TIC-80's 512K
    limit, the user wants it under 64K (editing more in TIC-80 needs Pro), or
    they want it as small as possible. Code past 64K plays in every TIC-80,
    tic80.com included. Choose `-m=max` only when `-m` isn't small
-   enough: on eight games it saved another 2–20% (12% typical). `rename-functions` saves
-   most on code written as many global functions, and `rename-tables` on
-   code with many long field and method names. `rename-tables` renames keys
+   enough: on eight games it saved up to another 11% (7% typical), most on code
+   with many long field and method names. `rename-tables` renames keys
    only where an analysis proves it safe: if the report's `table keys:` line
    says `not renamed`, it names the reason and line (often a `pairs` loop
    that prints or concatenates its keys). That is a size note, not an error.
@@ -106,8 +105,8 @@ can't be a `.tic`.
 
    Point to the biggest `total` files (bytes after minifying), and to any
    with a low `reduction`. What the code is made of follows (its `function
-   names rename-functions would shorten` and `table field and method names`
-   lines are what `-m=max` works on), then the biggest names never renamed, such as globals, which you
+   names rename-functions would shorten` line applies only without it, and
+   its `table field and method names` line is what `-m=max` works on), then the biggest names never renamed, such as globals, which you
    can shorten by hand. A negative entry is normal. An inlined constant's
    bytes move to the file that reads it, and the `(added by ticpak)` row
    holds the aliases and shared literals `extra` declares. `(removed: unused)` marks a module
@@ -124,7 +123,7 @@ can't be a `.tic`.
 | `metadata header is incomplete` | Fill in the listed tags in `main.lua`. |
 | `module 'x' not found at ...` | `main.lua` requires a module that isn't at that path. Names are paths from the cart's folder (`a.b` is `a/b.lua`). |
 | boot output with `module 'x' not found`, then `FAILED to boot alone` | A module that only another module requires. Add `require "x"` to `main.lua`: ticpak inlines only the modules named there. |
-| boot output with `[string "..."]:N:` or `stack traceback` | A syntax or runtime error during boot. Save the quoted output to a file and decode it with `ticpak error -m=... < boot.txt`, giving the same `-m` as the build (no `.tic` was saved, so the options must come from you), then fix the source. |
+| boot output with `[string "..."]:N:` or `stack traceback` | A syntax or runtime error during boot. Save the quoted output to a file and decode it with `ticpak decode -m=... --log boot.txt`, giving the same `-m` as the build (no `.tic` was saved, so the options must come from you), then fix the source. |
 | `TIC-80 reads a line starting -- < ...` | A module comment starts `-- <` in column 0. Reword or indent it, or build with at least `-m=comments`. |
 | `x.lua:N: a comment kept by NOMINIFY has a line starting -- <` | A comment that a `NOMINIFY` directive keeps would read as an asset section tag. Reword or indent that line. |
 | `x.lua:N starts an asset section (-- <MAP>), but only main.lua's asset sections are packaged` | A module holds asset data, which would be cut off or silently stripped. Move the whole section into `main.lua`'s asset sections, merging with any existing section of the same name. |
@@ -148,29 +147,41 @@ copied `.minify.txt` from the failing build.
 TIC-80 reports `[string "-- title: ..."]:37: message` and a `stack
 traceback:`. Line 37 is a line of the **bundle**, not of a module, and once
 minified it can hold a whole function; past `rename-vars` the names in the
-message are short ones. Don't decode it by hand: `ticpak error` does it, for
+message are short ones. Don't decode it by hand: `ticpak decode` does it, for
 any build. Run it from the folder holding `main.lua` with the whole error,
-traceback included, either inline or from a file (it reads stdin without
-`-e`, so never run it bare):
+traceback included: inline, or a file holding TIC-80's output (it decodes
+the last error in it):
 
 ```
-ticpak error -e '[string "-- title: ..."]:37: attempt to ...'
-ticpak error < error.txt
+ticpak decode -e '[string "-- title: ..."]:37: attempt to ...'
+ticpak decode --log tic80.log
+ticpak decode            # the clipboard: when the user copied the error in TIC-80
 ```
+
+A bare `ticpak decode` reads redirected stdin first, then the clipboard. Use
+it only when the user says they copied the error, from TIC-80's console
+(mouse select, Ctrl+C). ticpak rejoins the console's 40-column rows. If
+the clipboard holds no error, it exits 1 with `no error to translate`.
+
+To catch errors while the user plays, `ticpak debug` runs the package in
+TIC-80's window and prints everything TIC-80 prints, each error already
+decoded. It returns only when the window is closed.
 
 It finds the cart as `check` does (`<name>.tic` beside `main.lua` or in
 `dist/`; `-o`/`-n` for another build) and prints the error with each
 location as `file:line` and each name as written, then `source:` and the
-error's source line. Read the first line it prints:
+error's source line. With `--log` or the clipboard it first prints where
+the error came from (`error: the clipboard`). Read the `map:` or `WARN`
+line it prints next:
 
-| First line | Meaning |
+| Line | Meaning |
 |---|---|
 | `map: dist/<name>.minify.json` or `map: the sources rebuilt (-m=...); they match <cart>` | exact: the map is that cart's |
 | `map: <cart> not found; decoding against the sources built now` | there was no cart, so it decoded against a fresh build with the `-m` you gave |
 | `WARN <cart> does not match the sources built now` | the sources (or `-m`, or the ticpak version) changed since the build: the result is a guess. Decode against the sources as they were at that release (check them out), or rebuild and reproduce the error |
 
 A location `file:12-14` is a range: that bundle line held several calls the
-error could be (the same function called twice, say). `ticpak error` exits 1
+error could be (the same function called twice, say). `ticpak decode` exits 1
 with `no location in the cart found` when the text has no `[string
 "..."]:N`; it needs `-m=...` when the cart has no `-- ticpak:` line (built
 before 0.3.4) or is missing. `dist/<name>.minify.txt` (a folder build past

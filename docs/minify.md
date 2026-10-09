@@ -20,7 +20,7 @@ Minification is a set of options (`--minify=comments,rename-vars` for
 |---|---|---|
 | `comments` | Removes comments and nothing else: indentation, blank lines and line breaks stay as written. A line that held only comments is dropped. Header metadata and asset chunks pass through. | (comment stripper) |
 | `rename-vars` | Variables get the shortest free names (1–2 letters). A `NOMINIFY` comment keeps a name: see [Opting out](#opting-out-nominify). | rename-vars |
-| `rename-functions` | Functions get the shortest free names too. Not in the `default` preset: error messages and tracebacks then show the short names (the [decode map](#outputs) has the originals). | rename-functions |
+| `rename-functions` | Functions get the shortest free names too. Error messages and tracebacks then show the short names (the [decode map](#outputs) has the originals). | rename-functions |
 | `rename-tables` | Table keys (fields and methods: `obj.speed`, `M.update`, `{hp=3}`, `t["k"]`) get the shortest free names too, the same new name for a key everywhere, when an analysis of the whole program proves that safe; otherwise none is renamed and the report says why. Not in the `default` preset: error messages then show short field and method names, and its guarantee rests on that analysis. See [Table keys](#table-keys-rename-tables). | rename-tables |
 | `constants` | Constant values are inlined and the constants' declarations removed. With `extra` off, a restricted removal deletes only constants nothing reads any more; with `rename-vars` off, the size check costs names at their real length. | inline |
 | `whitespace` | Extraneous newlines and whitespace removed: one function start per line, packed to 120 columns. **Without it, the source's line breaks are kept**, one space of indent per block level. | layout |
@@ -40,29 +40,30 @@ them removes comments too (`comments` is added automatically).
 | `--minify=constants` | `comments,constants` (line breaks kept) | 69,091 |
 | `--minify=whitespace` | `comments,whitespace` | 68,593 |
 | `--minify=rename-vars,constants,extra` | line breaks kept | 57,517 |
-| `--minify` | the `default` preset: every option but `rename-functions` and `rename-tables` | 50,961 |
-| `--minify=default,rename-functions` | | 45,708 |
+| `--minify=comments,rename-vars,constants,whitespace,extra` | | 50,961 |
+| `--minify` | the `default` preset: every option but `rename-tables` | 45,708 |
 | `--minify=max` | the `max` preset: every option | 44,638 |
 
-Two presets name option sets: `default`, every option but `rename-functions`
-and `rename-tables`, and `max`, every option. In `ticpak`, no `--minify` means no minification, a
+Two presets name option sets: `default`, every option but `rename-tables`,
+and `max`, every option. In `ticpak`, no `--minify` means no minification, a
 bare `--minify` means `default`, and `--minify=OPTION,...` means just those
 (a preset can be one of them: `--minify=max`). `ticpak minify` takes each
 option as a flag (`--rename-vars`) and `max` as `--max`; with none, `default`
 applies. This module's API takes the same comma-separated options and presets
 (empty: passthrough).
 
-`rename-functions` is left out of `default` because it costs readable error
-messages: TIC-80 reports `attempt to call a nil value (global 'q')` and
-tracebacks name `function 'q'`, which `ticpak error` (with the decode map)
-turns back into source names. What it saves depends on the code. On the 8 ports it took 1.9–12.1% off
-the `default` output: little where functions live in module tables
-(`M.update` is a field, which only `rename-tables` renames), most where a game
-is written as many global functions with long names.
+`rename-functions` costs readable error messages: TIC-80 reports `attempt to
+call a nil value (global 'q')` and tracebacks name `function 'q'`, which
+`ticpak decode` (with the decode map) turns back into source names. It was
+left out of `default` until 2026-10-09. What it saves depends on the code. On
+the 8 ports it took 1.9–12.1% off the output without it: little where
+functions live in module tables (`M.update` is a field, which only
+`rename-tables` renames), most where a game is written as many global
+functions with long names.
 
-`rename-tables` is left out of `default` for the same reason, and one more: it
-renames a key only when an analysis of how the program uses strings proves
-that safe, a guarantee the other options get from Lua's semantics alone. On
+`rename-tables` is left out of `default`: it renames a key only when an
+analysis of how the program uses strings proves that safe, a guarantee the
+other options get from Lua's semantics alone. On
 the 8 ports it took another 7.1% off (2.3–11.4% each; one port, which reads
 `load`, keeps every key). [Table keys](#table-keys-rename-tables) has the
 details.
@@ -135,7 +136,7 @@ key usually comes from a `pairs` loop, and the string from `..`,
 `rename-tables` off to keep them all.
 
 Error messages and tracebacks show the new names (`attempt to index a nil
-value (field 'q')`, `in method 'b'`); `ticpak error` turns them back. The
+value (field 'q')`, `in method 'b'`); `ticpak decode` turns them back. The
 [decode map](#outputs) lists each renamed key as kind `field`, and a key has
 the same new name everywhere.
 `pairs` may also visit a table's keys in another order, since the new keys
@@ -374,7 +375,7 @@ A folder build (`ticpak bundle -o dist/`) with any `--minify=` option past
     they are also a string or a built key could spell them;
   - the functions, modules, names and comments kept by `NOMINIFY`.
 - **`dist/<name>.minify.json`**, for decoding an error from the packaged cart
-  (`ticpak error` reads it, or makes the same map in memory; see the README's
+  (`ticpak decode` reads it, or makes the same map in memory; see the README's
   "Errors from the packaged cart"). Format 2:
   - `"build"` is the cart's `-- ticpak:` line, and `"code"` a hash of its
     code (`sha1:` of the code above the asset sections, LF line endings,
@@ -452,7 +453,7 @@ Standalone, `ticpak minify FILE` writes to stdout. Each option is a flag:
 `--comments`, `--rename-vars`, `--rename-functions`, `--rename-tables`,
 `--constants`, `--whitespace`, `--extra`, and `--max` for every option; with
 none of them, the `default` options apply (every option but
-`--rename-functions` and `--rename-tables`).
+`--rename-tables`).
 
 ```
 ticpak bundle -f --minify=comments -o dist/   # bundle, comments out (see below)
@@ -475,7 +476,7 @@ As a module (`ticpak` uses `minify_cart_ex`):
 ```python
 from ticpak import minify
 text = minify.minify(src, mode="max")                   # str; "max" = every option
-text = minify.minify(src, mode="default")               # all but rename-functions, rename-tables
+text = minify.minify(src, mode="default")               # all but rename-tables
 text = minify.minify(src, mode="comments,rename-vars")  # any options
 minify.parse_options("comments,rename-vars")            # -> frozenset({...})
 r = minify.minify_cart_ex(cart_text, mode="max", meta_keys=KEYS)

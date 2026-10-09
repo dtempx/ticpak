@@ -16,7 +16,7 @@ from . import minify as minifier
 from .check import (CODE_LIMIT, META_LINE_RE, STAMP_RE, TEXT_SECTION_RE, check_header,
                     parse_header, parse_tic, read_stamp, tic_code)
 from .console import detail, fwd, show, step
-from .header import CHUNK_RE, META_KEYS, cart_code
+from .header import CHUNK_RE, META_KEYS, cart_code, incomplete_fields
 
 MINIFY_RATE = 300_000         # bytes/s minify_max measures savings at, for the progress bar
 ADDED = "(added by ticpak)"   # the savings row for the bundle's own lines: preload wrappers
@@ -138,6 +138,89 @@ def stub_requires(code):
                 names.append(name)
         pos += len(line)
     return names, first
+
+
+UNREFERENCED_SHOWN = 10     # unreferenced .lua files `check` lists before "(+N more)"
+
+
+def check_sources(cart):
+    """`check`'s look at the sources, printed: each module main.lua requires
+    and whether its file is there; any module only another module requires
+    (not packaged, so its `require` fails in the .tic); the other .lua files
+    under the cart's folder that nothing requires (built bundles and
+    *.min.lua aside); and main.lua's metadata header. Returns False if a
+    module main.lua requires is missing or the header is incomplete."""
+    cart = os.path.abspath(cart)
+    cart_dir = os.path.dirname(cart)
+
+    def path_of(name):
+        return os.path.join(cart_dir, *name.split(".")) + ".lua"
+
+    names = stub_requires(cart_code(cart))[0]
+    by = {name: None for name in names}     # module -> the module requiring it (None: main.lua)
+    queue = list(names)
+    while queue:
+        name = queue.pop(0)
+        if os.path.isfile(path_of(name)):
+            for sub in stub_requires(open(path_of(name), encoding="utf-8").read())[0]:
+                if sub not in by:
+                    by[sub] = name
+                    queue.append(sub)
+
+    ok = True
+    print(f"modules: {len(names)} required by {os.path.basename(cart)}")
+    width = max(map(len, by), default=0)
+    for name, parent in by.items():
+        rel = os.path.relpath(path_of(name), cart_dir).replace(os.sep, "/")
+        found = os.path.isfile(path_of(name))
+        if parent is None:
+            status, note = ("OK", "") if found else ("MISSING", " not found")
+            ok = ok and found
+        else:
+            status = "WARN"
+            note = ((" " if found else " not found; ")
+                    + f"required by {parent.replace('.', '/')}.lua but not main.lua,"
+                    " so not packaged: add it to main.lua's requires")
+        print(f"  {status:<8} {name:<{width}}  {rel}{note}")
+
+    referenced = {os.path.normcase(path_of(n)) for n in by} | {os.path.normcase(cart)}
+    others = []
+    for root, dirs, files in os.walk(cart_dir):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for f in sorted(files):
+            path = os.path.join(root, f)
+            if (not f.lower().endswith(".lua") or f.lower().endswith(".min.lua")
+                    or os.path.normcase(path) in referenced or is_bundle(path)):
+                continue
+            others.append(os.path.relpath(path, cart_dir).replace(os.sep, "/"))
+    if others:
+        print(f"unreferenced: {len(others)} other .lua file{'s' if len(others) != 1 else ''}"
+              f" not required by {os.path.basename(cart)} (not packaged)")
+        for rel in others[:UNREFERENCED_SHOWN]:
+            print(f"  {rel}")
+        if len(others) > UNREFERENCED_SHOWN:
+            print(f"  (+{len(others) - UNREFERENCED_SHOWN} more)")
+
+    meta = parse_header(cart_code(cart))
+    missing = incomplete_fields(meta)
+    if not meta:
+        print(f"header: MISSING - {os.path.basename(cart)} has no metadata header:"
+              " start it with `-- title:`, `-- author:` ... comments")
+    elif missing:
+        print(f"header: INCOMPLETE - {os.path.basename(cart)} is missing or has"
+              f" placeholders for: {', '.join(missing)}")
+    else:
+        print(f"header: complete in {os.path.basename(cart)}")
+    return ok and not missing
+
+
+def is_bundle(path):
+    """Was path built by ticpak (a `-- ticpak:` line in its header)?"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return read_stamp(f.read(4096)) is not None
+    except OSError:
+        return False
 
 
 def freshness(t, module=False):
@@ -271,12 +354,26 @@ def minify_flag(options):
 
 # Options renamed since: an older build's `-- ticpak:` line still reads right.
 OLD_OPTIONS = {"rename": "rename-vars"}
+# A bare -m stamped before this version meant default without rename-functions.
+RENAME_FUNCTIONS_DEFAULT = (0, 4, 4)
 
 
-def flag_options(flag):
+def version_tuple(version):
+    """'0.4.1' -> (0, 4, 1); None when it is not dotted numbers."""
+    try:
+        return tuple(int(p) for p in version.split("."))
+    except (AttributeError, ValueError):
+        return None
+
+
+def flag_options(flag, version=None):
     """minify_flag() read back: the options a -m flag names (options this
-    version does not know are dropped)."""
+    version does not know are dropped). version, the stamp's, tells which
+    options a bare -m meant then."""
     if flag == "-m":
+        v = version_tuple(version)
+        if v is not None and v < RENAME_FUNCTIONS_DEFAULT:
+            return minifier.DEFAULT_OPTIONS - {"rename-functions"}
         return minifier.DEFAULT_OPTIONS
     items = [OLD_OPTIONS.get(o, o) for o in flag[3:].split(",")] \
         if flag.startswith("-m=") else []
@@ -330,7 +427,7 @@ def built_stamp(path):
 def built_options(path):
     """The minify options an existing output was built with; None if unknown."""
     stamp = built_stamp(path)
-    return flag_options(stamp[1]) if stamp else None
+    return flag_options(stamp[1], stamp[0]) if stamp else None
 
 
 def options_label(options):
@@ -506,7 +603,7 @@ def code_hash(text):
 
 
 def map_doc(b):
-    """The decode map of a Built, as .minify.json holds it (ticpak error
+    """The decode map of a Built, as .minify.json holds it (ticpak decode
     reads it, or makes it in memory). Output lines are the cart's, source
     lines [file, line] (file null for a line ticpak added):
 

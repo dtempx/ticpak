@@ -10,7 +10,8 @@ ticpak check main.lua <name>.tic         # source header and package in one run
 
 `ticpak check` needs a built cart, at the place the build put it. Without
 `-o` it finds `<name>.tic` beside `main.lua` or in `dist/` (the newer if
-both); for anywhere else, give the same `-o` the build used. If it says the `.tic` is not found, build it first
+both); for anywhere else, give the same `-o` the build used. If it says `(not built yet)`, it exits 1 with
+`hint: ticpak bundle -m to build` (plus the `-o` given): build it first
 ([bundle.md](bundle.md)). Given files, `ticpak check` checks exactly those: any
 `.tic` or text-cart `.lua` files. For a `.lua`, it checks the header and lists
 the banks its `-- <MAP1>`-style section tags use. Both exit 0 when every check
@@ -23,8 +24,17 @@ file and option, which `check` alone doesn't show.
 
 ## What the report lines mean
 
+`ticpak check` (not `check FILE...`) first lists the sources: `modules:`
+with a status per module `main.lua` requires, `unreferenced:` with up to 10
+other `.lua` files under its folder that nothing requires (then `(+N more)`),
+and `header:` for `main.lua`'s metadata header.
+
 | Line | Meaning | What to do |
 |---|---|---|
+| `MISSING  <module>  <path> not found` | `main.lua` requires a module whose file isn't there. A failure. | Create the file, fix the name in the `require`, or drop the `require`. |
+| `WARN  <module> ... required by X.lua but not main.lua` | Only another module requires it. ticpak packages only `main.lua`'s requires, so this `require` fails in the `.tic`. Not a failure of `check`. | Add `require "<module>"` to `main.lua`. |
+| `unreferenced: N other .lua files` | `.lua` files that aren't packaged. Not a failure. | Mention them; ask the user whether any should be required. |
+| `header: MISSING` / `header: INCOMPLETE` | `main.lua`'s header is absent, or tags are missing or TIC-80's placeholders. A failure. | Fill in the tags named in `main.lua`. |
 | `OVER  <SECTION> bank N` | An asset section exceeds its RAM region and would be truncated on load. A failure. | Shrink that section's data. |
 | `OVER  code` | The code is at or over TIC-80's 512 KB code limit, so TIC-80 would cut it off. A failure. `bundle` stops on this before booting: `the code is N bytes, over TIC-80's 512K code limit`. | Minify (`-m`, then `-m=max`), or trim the code. |
 | `MISSING  header field` | A required tag is absent, empty or still TIC-80's placeholder. A failure. | If `main.lua` fails, fill the tag in there. If `main.lua` passes but the `.tic` fails, the package is stale: rebuild with `ticpak bundle -f`. |

@@ -84,7 +84,7 @@ REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)                    # the ticpak package, installed or not
 sys.path.insert(0, HERE)                    # make_samples, for its asset layouts
 from ticpak import minify as M  # noqa: E402
-from ticpak import bundle, check, cli, report, run  # noqa: E402
+from ticpak import __version__, bundle, check, cli, report, run  # noqa: E402
 import make_samples  # noqa: E402
 
 try:
@@ -251,11 +251,9 @@ class TestOptionParsing(unittest.TestCase):
         self.assertEqual(M.parse_options([]), frozenset())
         self.assertEqual(M.ALL_OPTIONS, set(OPTIONS))
         self.assertEqual(M.parse_options("max"), M.ALL_OPTIONS)
-        self.assertEqual(M.parse_options("default"),
-                         M.ALL_OPTIONS - {"rename-functions", "rename-tables"})
+        self.assertEqual(M.parse_options("default"), M.ALL_OPTIONS - {"rename-tables"})
         self.assertEqual(M.parse_options("default"), M.DEFAULT_OPTIONS)
-        self.assertEqual(M.parse_options("default,rename-functions,rename-tables"),
-                         M.ALL_OPTIONS)
+        self.assertEqual(M.parse_options("default,rename-tables"), M.ALL_OPTIONS)
 
     def test_spelling(self):
         self.assertEqual(M.parse_options(" rename-vars , whitespace "),
@@ -306,14 +304,13 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(self.parse()[1].minify, M.DEFAULT_OPTIONS)
 
     def test_bare_is_default(self):
-        """A bare --minify: every option but the opt-in rename-functions and
-        rename-tables."""
+        """A bare --minify: every option but the opt-in rename-tables."""
         for argv in (["--minify"], ["bundle", "-f", "--minify"],
                      ["bundle", "src/main.lua", "--minify"],
                      ["bundle", "-m"], ["bundle", "-m", "-f"]):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, M.DEFAULT_OPTIONS)
-        self.assertNotIn("rename-functions", M.DEFAULT_OPTIONS)
+        self.assertIn("rename-functions", M.DEFAULT_OPTIONS)
         self.assertNotIn("rename-tables", M.DEFAULT_OPTIONS)
         self.assertIn("rename-tables", M.ALL_OPTIONS)
 
@@ -321,9 +318,8 @@ class TestCommandLine(unittest.TestCase):
         for argv, want in ((["-m=max"], M.ALL_OPTIONS), (["--minify=max"], M.ALL_OPTIONS),
                            (["-m", "max"], M.ALL_OPTIONS),
                            (["-m=default"], M.DEFAULT_OPTIONS),
-                           (["-m=default,rename-functions"],
-                            M.ALL_OPTIONS - {"rename-tables"}),
-                           (["-m=default,rename-functions,rename-tables"], M.ALL_OPTIONS)):
+                           (["-m=default,rename-functions"], M.DEFAULT_OPTIONS),
+                           (["-m=default,rename-tables"], M.ALL_OPTIONS)):
             with self.subTest(argv=argv):
                 self.assertEqual(self.parse(*argv)[1].minify, want)
 
@@ -474,13 +470,14 @@ class TestMinifyCommand(unittest.TestCase):
         out = self.run_cmd("--comments", "--whitespace", path)
         self.assertIn('print("hi",1,2)', out)
 
-    def test_functions_renamed_only_on_request(self):
-        """No flag: the default options, which keep function names; --max
-        and --rename-functions rename them."""
+    def test_functions_renamed(self):
+        """No flag (the default options), --max and --rename-functions rename
+        functions; options without rename-functions keep their names."""
         path = self.write("game.lua", self.HEADER + "function renamefn_hud() print(1) end\n"
                           "function TIC() renamefn_hud() end\n")
-        self.assertIn("renamefn_hud", self.run_cmd(path))
-        for flags in (["--max"], ["--rename-functions"], ["--rename-vars", "--rename-functions"]):
+        self.assertIn("renamefn_hud", self.run_cmd("--rename-vars", "--whitespace", path))
+        for flags in ([], ["--max"], ["--rename-functions"],
+                      ["--rename-vars", "--rename-functions"]):
             with self.subTest(flags=flags):
                 out = self.run_cmd(*flags, path)
                 self.assertNotIn("renamefn_hud", out)
@@ -502,6 +499,60 @@ class TestMinifyCommand(unittest.TestCase):
                      "--passes=fold", "--width=80", "--inline=all"):
             with self.subTest(flag=flag), self.assertRaises(SystemExit):
                 self.run_cmd(flag, path)
+
+
+class TestInit(unittest.TestCase):
+    """`ticpak init [FOLDER]`: main.lua (complete header, a stub requiring
+    game, an asset section) and game.lua, which bundle and minify; stops,
+    writing nothing, when there is a cart already or game.lua is taken."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="init-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def init(self, *argv):
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["init", *argv])
+
+    def test_new_project_bundles(self):
+        folder = os.path.join(self.tmp, "my game")      # made, as the project's name
+        self.init(folder)
+        cart = os.path.join(folder, "main.lua")
+        self.assertTrue(bundle.is_cart(cart))
+        code = bundle.cart_code(cart)
+        self.assertTrue(check.check_header(code, quiet=True))
+        self.assertEqual(check.parse_header(code)["title"], "my game")
+        self.assertEqual(bundle.stub_requires(code)[0], ["game"])
+        t = bundle.Target(cart, "my-game", None)
+        source, chunks, names, _ = bundle.assemble(t)
+        self.assertEqual(names, ["game"])
+        self.assertIn("-- <PALETTE>", chunks)
+        for preset in (M.DEFAULT_OPTIONS, M.ALL_OPTIONS):
+            M.minify_cart_ex(source, mode=preset, meta_keys=META_KEYS)
+
+    def test_stops_on_existing_project(self):
+        for existing in ("main.lua", os.path.join("src", "main.lua"), "game.lua"):
+            with self.subTest(existing=existing):
+                folder = tempfile.mkdtemp(dir=self.tmp)
+                path = os.path.join(folder, existing)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("-- mine\n")
+                with self.assertRaises(SystemExit) as e:
+                    self.init(folder)
+                self.assertIn("already exists", str(e.exception.code))
+                self.assertEqual(open(path, encoding="utf-8").read(), "-- mine\n")
+                self.assertEqual(sorted(os.listdir(folder)),
+                                 [existing.split(os.sep)[0]])
+
+    def test_takes_only_a_folder(self):
+        for argv in (["-f"], ["-m"], ["-o", "x.tic"], ["-n", "x"], ["a", "b"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as e:
+                self.init(*argv)
+            self.assertEqual(e.exception.code, 2)
 
 
 class TestOutputs(unittest.TestCase):
@@ -1560,11 +1611,16 @@ class TestBundle(unittest.TestCase):
                            (M.ALL_OPTIONS, "-m=max"),
                            (M.parse_options("rename-functions"), "-m=comments,rename-functions"),
                            (M.parse_options("rename-tables"), "-m=comments,rename-tables"),
-                           (M.DEFAULT_OPTIONS | {"rename-tables"},
-                            "-m=comments,rename-vars,rename-tables,constants,whitespace,extra")):
+                           (M.DEFAULT_OPTIONS - {"rename-functions"},
+                            "-m=comments,rename-vars,constants,whitespace,extra")):
             with self.subTest(flag=flag):
                 self.assertEqual(bundle.minify_flag(opts), flag)
                 self.assertEqual(bundle.flag_options(flag), opts)
+                self.assertEqual(bundle.flag_options(flag, __version__), opts)
+        # a bare -m stamped before 0.4.4 meant default without rename-functions
+        for version in ("0.4.3", "0.3.4"):
+            self.assertEqual(bundle.flag_options("-m", version),
+                             M.DEFAULT_OPTIONS - {"rename-functions"})
         self.assertEqual(bundle.flag_options("-m=comments,rename,whitespace"),
                          {"comments", "rename-vars", "whitespace"})
         self.assertEqual(bundle.flag_options("-m=comments,bogus"), {"comments"})

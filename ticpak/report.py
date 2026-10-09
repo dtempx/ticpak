@@ -132,7 +132,7 @@ def size_summary(tic, unminified=None, colour=False):
              tint(limit, level) if colour else limit]
     stamp = read_stamp(tic_code(data, chunks))
     if stamp:               # built by ticpak 0.3.4+: it says how it was minified
-        options = flag_options(stamp[1])
+        options = flag_options(stamp[1], stamp[0])
         if not options:
             lines.append("not minified")
         elif unminified is not None:
