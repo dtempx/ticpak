@@ -657,9 +657,9 @@ Run `ticpak` with no command. If the cart has never been built, it prints
 ```
 ? Cart name (.tic): [mygame]
 ? Minification:
-  1) default  - every option but rename-tables (small)  [default]
+  1) default  - everything except rename-tables  [default]
   2) comments - remove comments only
-  3) max      - every option, rename-tables too (smallest cart)
+  3) max      - all minification options
   4) none     - no minification (the bundled source verbatim)
   5) choose individual minification options...
 ? Minify options (space toggles, enter accepts):

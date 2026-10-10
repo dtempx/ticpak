@@ -120,9 +120,9 @@ def ask_minify(ui, minify):
                "none": frozenset()}
     current = next((k for k, v in presets.items() if v == minify), "pick")
     choice = ui.select("Minification:", [
-        ("default", "default  - every option but rename-tables (small)"),
+        ("default", "default  - everything except rename-tables"),
         ("comments", "comments - remove comments only"),
-        ("max", "max      - every option, rename-tables too (smallest cart)"),
+        ("max", "max      - all minification options"),
         ("none", "none     - no minification (the bundled source verbatim)"),
         ("pick", "choose individual minification options..."),
     ], default=current)
