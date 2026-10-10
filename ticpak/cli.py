@@ -30,7 +30,7 @@ from . import __version__, console, errors
 from . import minify as minifier
 from .scaffold import init_project
 from .bundle import (DEFAULT_DIR, Target, built_options, built_target, bundle,
-                     check_sources, find_cart, freshness, is_cart, minify_flag, minify_module, options_label,
+                     check_sources, find_cart, freshness, is_bundle, is_cart, minify_flag, minify_module, options_label,
                      out_kind, save_bundle, stub_requires, unminified_size)
 from .check import check_lua, check_tic, parse_header
 from .console import FlatStdout, Progress, Prompts, fwd, has_terminal, highlight, show
@@ -62,8 +62,10 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak bundle enemies.lua -m     one module on its own -> enemies.min.lua
   ticpak check main.lua dist/x.tic   check exactly these files: full report
   ticpak run                      run main.lua (the sources) in TIC-80
+  ticpak run other.lua            ...or the .lua or .tic named
   ticpak test                     run the package in TIC-80, its errors in the
                                    sources' files, lines and names
+  ticpak test dist/mygame.tic     ...that package
   ticpak decode                   the error copied from TIC-80's console (select it,
                                    Ctrl+C), in the sources' files, lines and names
   ticpak decode --log tic80.log   the last error in a log of TIC-80's output
@@ -231,7 +233,9 @@ def parse_args(argv):
                     help="the cart (main.lua) or a directory holding it"
                          " (default: ./main.lua, then ./src/main.lua), or a"
                          " module .lua to minify on its own; with `check`,"
-                         " files (.tic/.lua) to check directly")
+                         " files (.tic/.lua) to check directly; with `run`,"
+                         " a .lua or .tic to run; with `test`, the package"
+                         " (.tic, or a .lua ticpak built) to run")
     ap.add_argument("-f", "--force", action="store_true",
                     help="bundle: rebuild even if the package is up to date")
     ap.add_argument("-q", "--quiet", action="store_true",
@@ -619,33 +623,74 @@ def decode_command(args):
               " another build?")
 
 
+class Passthrough:
+    """A stream for play() that prints TIC-80's output as it is."""
+    feed = staticmethod(raw_write)
+
+    def idle(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def given_file(args):
+    """SOURCE when it names a file to run (`run`, `test`): a .lua or .tic."""
+    src = args.source
+    if src and os.path.isfile(src):
+        if not src.lower().endswith((".lua", ".tic")):
+            sys.exit(f"ticpak: {src} is not a .lua or .tic file")
+        return os.path.abspath(src)
+    return None
+
+
 def run_command(args):
-    """`ticpak run`: the cart's sources (main.lua, its modules loaded from
-    their files) in TIC-80's window until it is closed, from the cart's
-    folder, where `require` finds them. Its output passes through as it is:
-    errors already name the sources. Exits with TIC-80's status."""
-    cart = find_cart(args.source)
-    if not cart or not is_cart(cart):
-        sys.exit("ticpak: run needs the cart (main.lua): run from its directory,"
-                 " or give its location")
+    """`ticpak run [FILE]`: the cart's sources (main.lua, its modules loaded
+    from their files), or the .lua or .tic named, in TIC-80's window until
+    it is closed, from that file's folder, where `require` finds the
+    modules. Its output passes through as it is: errors already name the
+    sources. Exits with TIC-80's status."""
+    path = given_file(args)
+    if not path:
+        path = find_cart(args.source)
+        if not path or not is_cart(path):
+            sys.exit("ticpak: run needs the cart (main.lua): run from its directory,"
+                     " or give its location (or a .lua or .tic to run)")
+    print(f"running {fwd(path)} in TIC-80 (close it, or Ctrl+C here, to stop)")
+    sys.exit(play(path, Passthrough(), cwd=os.path.dirname(path)))
 
-    class Passthrough:
-        feed = staticmethod(raw_write)
 
-        def idle(self):
-            pass
-
-        def close(self):
-            pass
-    print(f"running {fwd(cart)} in TIC-80 (close it, or Ctrl+C here, to stop)")
-    sys.exit(play(cart, Passthrough(), cwd=os.path.dirname(os.path.abspath(cart))))
+def package_file_target(args, path):
+    """`test FILE` naming a package (a .tic, or a .lua ticpak built): its
+    Target, with the cart it was built from (main.lua in the current folder,
+    the package's folder or the one above it); None when there is none."""
+    if args.out:
+        sys.exit("ticpak: test: give the package to run, or -o, not both")
+    here = os.path.dirname(path)
+    for d in (None, here, os.path.dirname(here)):
+        cart = find_cart(d)
+        if cart and is_cart(cart):
+            name = slug(args.name) if args.name else package_name(parse_header(cart_code(cart)))
+            return Target(cart, name or "game", path)
+    return None
 
 
 def test_command(args):
-    """`ticpak test`: the package in TIC-80's window until it is closed, all
-    it prints passed through, each error in the cart translated back to the
+    """`ticpak test [FILE]`: the package (or the .tic or built .lua named) in
+    TIC-80's window until it is closed, all it prints passed through, each error in the cart translated back to the
     sources as it happens (errors.Stream). Exits with TIC-80's status."""
-    t = package_target(args, "test")
+    path = given_file(args)
+    if path and (path.lower().endswith(".tic") or is_bundle(path)):
+        t = package_file_target(args, path)
+        if t is None:                   # no sources: nothing to translate to
+            print(f"running {fwd(path)} in TIC-80 (close it, or Ctrl+C here, to stop);"
+                  " no cart (main.lua) found, so errors are shown as they are")
+            sys.exit(play(path, Passthrough(), cwd=os.path.dirname(path)))
+    else:
+        if path and not is_cart(path):
+            sys.exit(f"ticpak: {fwd(path)} is not a package ticpak built - run it"
+                     " with ticpak run")
+        t = package_target(args, "test")
     if not os.path.isfile(t.output):
         print(f"cart: {fwd(t.output)} (not built yet)")
         build_hint(args, t, package_name(parse_header(cart_code(t.cart))))

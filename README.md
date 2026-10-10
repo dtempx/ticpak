@@ -278,8 +278,8 @@ release. `main.lua` and the modules stay your sources.
 ticpak init [FOLDER] [-q]
 ticpak [bundle | check] [SOURCE] [options]
 ticpak check FILE... [-q]
-ticpak run [SOURCE]
-ticpak test [SOURCE] [-o PATH] [-n NAME] [-m...]
+ticpak run [SOURCE | FILE.lua | FILE.tic]
+ticpak test [SOURCE | PACKAGE] [-o PATH] [-n NAME] [-m...]
 ticpak decode [SOURCE] [-o PATH] [-n NAME] [-m...] [-e TEXT | -l FILE]
 ticpak minify [options] FILE
 ```
@@ -291,8 +291,8 @@ ticpak minify [options] FILE
 | `bundle` | builds and checks, or does nothing when the cart is up to date | never |
 | `check` | checks the project's existing `.tic` without building | never |
 | `check FILE...` | checks exactly the files named ([below](#checking-any-file)) | never |
-| `run` | runs `main.lua` in TIC-80's window until you close it, from the cart's folder so `require` loads the modules from their files; passes on what TIC-80 prints | never |
-| `test` | runs the package in TIC-80's window until you close it, translating its errors as they happen ([below](#errors-from-the-packaged-cart)) | never |
+| `run` | runs `main.lua`, or the `.lua` or `.tic` you name, in TIC-80's window until you close it, from that file's folder so `require` loads the modules from their files; passes on what TIC-80 prints | never |
+| `test` | runs the package (or the `.tic`, or the `.lua` bundle, you name) in TIC-80's window until you close it, translating its errors as they happen ([below](#errors-from-the-packaged-cart)) | never |
 | `decode` | translates an error from the packaged cart back to the sources ([below](#errors-from-the-packaged-cart)) | never; at a terminal, asks you to paste the error when the clipboard holds none |
 | `minify FILE` | the minifier on its own ([below](#the-minifier-on-its-own)) | never |
 
@@ -339,7 +339,9 @@ ticpak bundle path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak bundle enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
 ticpak run                      # run main.lua in TIC-80 (the sources, as they are)
+ticpak run other.lua            # ...or another .lua, or a .tic
 ticpak test                     # run the .tic in TIC-80, its errors in your files and names
+ticpak test dist/mygame.tic     # ...that package
 ticpak decode                   # the error copied from TIC-80's console, translated
 ticpak decode --log tic80.log   # the last error in a log of TIC-80's output
 ticpak minify enemies.lua        # one module, minified, to stdout
@@ -424,7 +426,11 @@ package in TIC-80's window and passes on everything TIC-80 prints (its
 console, `trace` included, goes to its standard output too), translating
 each error as it happens. Close the window, or press Ctrl+C, to stop it. An
 error it can't translate (from another chunk, or with no decode map) is
-passed on as it is.
+passed on as it is. Name a package to run that one instead: `ticpak test
+dist/mygame.tic`, or a `.lua` bundle ticpak built. ticpak looks for the cart
+it was built from (`main.lua`) in the current folder, then in the package's
+folder and the one above it; with none, the package runs and its errors are
+shown as TIC-80 prints them.
 
 `ticpak decode` translates an error afterwards. Copy it in TIC-80's console:
 select the message and its traceback with the mouse, press Ctrl+C, then run
@@ -866,7 +872,7 @@ first it finds:
 1. `$TIC80`, if set to the binary's path;
 2. `tic80` on `PATH`;
 3. where TIC-80's own download puts it:
-   - **Windows**: your `Downloads` folder, for a file named
+   - **Windows**: your `Downloads` folder, for `tic80.exe`, else a file named
      `tic80-v<version>-win.exe` (`tic80-v1.3-win.exe`, say), the highest
      version if there are several. ticpak works out which `Downloads` folder
      from the current folder: when you run it somewhere under
@@ -880,8 +886,20 @@ first it finds:
 ticpak doesn't search the disk beyond these. If none has it, ticpak stops with
 `ticpak: no TIC-80 Pro binary found - install TIC-80 Pro
 (https://nesbox.itch.io/tic80), or add tic80 to your PATH (or set $TIC80 to
-its path)`. ticpak doesn't check that the binary it finds is Pro: a free
-build fails the boot test.
+its path)`.
+
+Every command that runs TIC-80 (`bundle`, the interactive build, `run` and
+`test`) says which binary it used, and how it found it (`$TIC80`, `PATH`,
+`Downloads` or `installed`):
+
+```
+tic80: C:\Users\you\Downloads\tic80-v1.3-win.exe (Downloads)
+```
+
+(`-q` hides it, with everything else.) If the binary isn't Pro, the build
+stops with `bundle: FAILED - <path> is not TIC-80 Pro, which ticpak needs to
+load the bundle: ...`: point `$TIC80` at the Pro build, or put it first on
+your `PATH`.
 
 ## Output
 

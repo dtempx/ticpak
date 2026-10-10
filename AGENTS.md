@@ -24,7 +24,7 @@ python tests/options/make_samples.py   # regenerate samples/ and project/main.lu
 python scripts/update_reserved.py      # refresh minify.py's TIC-80 reserved-name and library-key block from the binary
 ```
 
-There is no linter or pytest config; tests are plain scripts using stdlib `unittest`. Behaviour tests skip without `lupa`. Anything that boots TIC-80 needs the **Pro** binary, found via `$TIC80`, then `tic80` on PATH, then `run.installed_tic80` (Windows: the newest `tic80-v*-win.exe` in `C:\Users\<name>\Downloads`, the user taken from the current folder; macOS: `tic80.app` in `/Applications`; Linux: `/usr/bin/tic80` from the `.deb`). It never searches the disk.
+There is no linter or pytest config; tests are plain scripts using stdlib `unittest`. Behaviour tests skip without `lupa`. Anything that boots TIC-80 needs the **Pro** binary, found via `$TIC80`, then `tic80` on PATH, then `run.installed_tic80` (Windows: `tic80.exe`, else the newest `tic80-v*-win.exe`, in `C:\Users\<name>\Downloads`, the user taken from the current folder; macOS: `tic80.app` in `/Applications`; Linux: `/usr/bin/tic80` from the `.deb`). It never searches the disk.
 
 ## Constraints
 

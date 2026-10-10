@@ -73,6 +73,7 @@ end
 
 function {MODULE}.init()
   t = 0
+  set_color(3, 0xff9cab)
   set_color(14, 0x73283a)
   set_color(15, 0x3e161d)
 end
@@ -88,7 +89,7 @@ function {MODULE}.draw()
     circ(dot_x(t - i * 2), 86, 4, TRAIL[i])
   end
   circ(dot_x(t), 86, 4, 2)
-  circ(dot_x(t), 86, 1, 12)
+  circ(dot_x(t), 86, 1, 3)
 end
 """
 

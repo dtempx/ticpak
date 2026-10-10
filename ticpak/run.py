@@ -46,10 +46,14 @@ def _windows_downloads(cwd):
 
 
 def _windows_download(cwd):
-    """The newest tic80-vX.Y.Z-win.exe in that Downloads folder, or None."""
+    """tic80.exe in that Downloads folder, else the newest tic80-vX.Y.Z-win.exe
+    there, or None."""
     d = _windows_downloads(cwd)
     if not d:
         return None
+    plain = os.path.join(d, "tic80.exe")
+    if os.path.isfile(plain):
+        return plain
     found = []
     for name in os.listdir(d):
         m = WIN_DOWNLOAD_RE.match(name)
@@ -59,8 +63,8 @@ def _windows_download(cwd):
 
 
 def installed_tic80(cwd=None):
-    """TIC-80 where its own download installs it: (Windows) the newest
-    tic80-v*-win.exe in the Downloads folder of the user folder the current
+    """TIC-80 where its own download installs it: (Windows) tic80.exe, else
+    the newest tic80-v*-win.exe, in the Downloads folder of the user folder the current
     folder is in; (macOS) the app in /Applications or ~/Applications; (Linux)
     /usr/bin/tic80 from the .deb, or /usr/local/bin/tic80. None if not there."""
     if os.name == "nt":
@@ -74,17 +78,33 @@ def installed_tic80(cwd=None):
     return next((p for p in paths if _is_exe(p)), None)
 
 
-def tic80_exe():
-    """The Pro binary: $TIC80, else `tic80` on PATH, else installed_tic80()."""
+_found = None           # tic80_exe's answer, found and printed once
+
+
+def find_tic80():
+    """(The Pro binary, where it was found): $TIC80, else `tic80` on PATH,
+    else installed_tic80(); exits if none has it."""
     env = os.environ.get("TIC80")
     if env and os.path.isfile(env):
-        return env
-    found = shutil.which("tic80") or installed_tic80()
-    if found:
-        return found
+        return env, "$TIC80"
+    path = shutil.which("tic80")
+    if path:
+        return path, "PATH"
+    path = installed_tic80()
+    if path:
+        return path, "Downloads" if os.name == "nt" else "installed"
     sys.exit("ticpak: no TIC-80 Pro binary found - install TIC-80 Pro"
              " (https://nesbox.itch.io/tic80), or add tic80 to your PATH"
              " (or set $TIC80 to its path)")
+
+
+def tic80_exe():
+    """The Pro binary (find_tic80), printing where it is the first time."""
+    global _found
+    if _found is None:
+        _found = find_tic80()
+        print(f"tic80: {_found[0]} ({_found[1]})")
+    return _found[0]
 
 
 IDLE_SECONDS = 0.3      # `test`: output this long quiet ends an error's traceback
@@ -220,6 +240,10 @@ def verify(t, tic=None):
             for line in out.splitlines():
                 if line.strip():
                     print("   |", line[:120])
+            if "PRO is needed" in out:
+                sys.exit(f"bundle: FAILED - {exe} is not TIC-80 Pro, which ticpak"
+                         " needs to load the bundle: install Pro, and set $TIC80 to"
+                         " it or put it first on your PATH")
             print("bundle: FAILED to boot alone")
             sys.exit(1)
         detail(f"bundle: boots headless from a directory containing only {lua}")
