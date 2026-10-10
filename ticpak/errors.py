@@ -16,7 +16,7 @@ cart's code.
 
 The error text comes from the clipboard (copied from TIC-80's console, which
 breaks it into 40-column rows: unwrap), a log of TIC-80's output (its last
-error: last_error), or as it runs (`ticpak debug`: Stream).
+error: last_error), or as it runs (`ticpak test`: Stream).
 """
 import json
 import os
@@ -530,7 +530,7 @@ def _windows_clipboard():
 
 
 class Stream:
-    """TIC-80's output as it runs (`ticpak debug`), passed through as it is
+    """TIC-80's output as it runs (`ticpak test`), passed through as it is
     but for its errors, each decoded once it is whole: when a line that is
     not part of its traceback follows, or the output pauses (idle). An error
     outside the cart, or that can't be decoded, passes through too.

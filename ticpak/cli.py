@@ -10,11 +10,11 @@ work:
   bundle.py   find the cart, the outputs (-o), inline its modules, minify,
               write <name>.lua
   run.py      find TIC-80, boot the bundle headless, save <name>.tic;
-              `ticpak debug`: the cart in TIC-80's window
+              `ticpak run`, `test`: the cart in TIC-80's window
   report.py   check the .tic (check.py), the summary, the -r report file
   header.py   the metadata header: output name, missing tags, filling in
   console.py  --verbose, the flush-left console, the prompts
-  errors.py   `ticpak decode` and `debug`: a packaged cart's runtime error, decoded
+  errors.py   `ticpak decode` and `test`: a packaged cart's runtime error, decoded
   scaffold.py `ticpak init`: a new project's main.lua and first module
   minify.py   the minifier;  check.py  the .tic checker
 """
@@ -61,7 +61,8 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak bundle -q                 no output: just the exit status
   ticpak bundle enemies.lua -m     one module on its own -> enemies.min.lua
   ticpak check main.lua dist/x.tic   check exactly these files: full report
-  ticpak debug                    run the package in TIC-80, its errors in the
+  ticpak run                      run main.lua (the sources) in TIC-80
+  ticpak test                     run the package in TIC-80, its errors in the
                                    sources' files, lines and names
   ticpak decode                   the error copied from TIC-80's console (select it,
                                    Ctrl+C), in the sources' files, lines and names
@@ -72,7 +73,7 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
 full documentation: https://github.com/dtempx/ticpak#readme
 """
 
-COMMANDS = ("init", "bundle", "check", "debug", "decode")  # `minify`: dispatched before argparse
+COMMANDS = ("init", "bundle", "check", "run", "test", "decode")  # `minify`: dispatched before argparse
 
 
 def minify_arg(text):
@@ -210,7 +211,7 @@ def parse_args(argv):
     """(command or None, argparse namespace, parser) for a command line."""
     ap = argparse.ArgumentParser(
         prog="ticpak",
-        usage="%(prog)s [init | bundle | check | debug | decode | minify] [SOURCE] [options]",
+        usage="%(prog)s [init | bundle | check | run | test | decode | minify] [SOURCE] [options]",
         description="Package a TIC-80 cart for distribution: inline its modules,"
                     " minify, boot-test headless, save the .tic, and check it."
                     " `init [FOLDER]` starts a new project (main.lua and a"
@@ -219,7 +220,8 @@ def parse_args(argv):
                     " `bundle` (skips an up-to-date package unless --force) and"
                     " `check` run without prompts, for automation. `check FILE...`"
                     " checks the named .tic/.lua files instead of the project's"
-                    " package; `debug` runs the package in TIC-80, translating"
+                    " package; `run` runs main.lua in TIC-80 as it is; `test`"
+                    " runs the package in TIC-80, translating"
                     " its errors back to the sources as they happen; `decode`"
                     " translates one afterwards (from the clipboard, a log,"
                     " or -e); `minify` runs the minifier on its own.",
@@ -274,7 +276,7 @@ def parse_args(argv):
                          " Without it or --log: stdin when redirected, else the"
                          " clipboard, else a paste at the terminal. -o and -n"
                          " pick the cart it came from as they do for check"
-                         " (and debug); -m gives the options it was built with"
+                         " (and test); -m gives the options it was built with"
                          " when it has no `-- ticpak:` line, or is not there")
     ap.add_argument("-l", "--log", metavar="FILE",
                     help="decode: translate the last error in FILE, a log of"
@@ -289,9 +291,12 @@ def parse_args(argv):
             ap.error("init takes only a folder (and -q)")
         if len(args.sources) > 1:
             ap.error("init: give one folder")
-    if command in ("check", "debug", "decode") and args.force:
+    if command == "run" and (args.force or args.report or args.quiet or args.out
+                             or args.name or args.minify is not None or args.verbose):
+        ap.error("run takes only the cart (SOURCE): it runs main.lua as it is")
+    if command in ("check", "test", "decode") and args.force:
         ap.error(f"--force applies to bundle, not {command}")
-    if command in ("debug", "decode") and (args.report or args.quiet):
+    if command in ("test", "decode") and (args.report or args.quiet):
         ap.error(f"{command}: -r and -q apply to bundle and check")
     if args.error_text is not None and command != "decode":
         ap.error("--error applies to the decode command: ticpak decode -e TEXT")
@@ -320,7 +325,7 @@ def parse_args(argv):
                  " or give -o a folder")
     args.source = args.sources[0] if args.sources and not args.files else None
     # Without -m, build and check don't minify; the interactive question
-    # offers the default options as its default. (decode, debug: the cart says.)
+    # offers the default options as its default. (decode, test: the cart says.)
     args.minify_given = args.minify is not None
     if args.minify is None:
         args.minify = frozenset() if command else minifier.DEFAULT_OPTIONS
@@ -406,8 +411,11 @@ def main(argv=None):
     if command == "decode":
         decode_command(args)
         return
-    if command == "debug":
-        debug_command(args)
+    if command == "run":
+        run_command(args)
+        return
+    if command == "test":
+        test_command(args)
         return
     interactive = command is None
     if interactive and not has_terminal():
@@ -431,7 +439,6 @@ def main(argv=None):
                   + (" here" if init == "ticpak init" else " there"))
         else:
             print("To start a new project here: ticpak init")
-        print("Specify --help for more info.")
         sys.exit(2)
     if not is_cart(cart):
         build_module(command, args, cart, interactive)
@@ -531,7 +538,7 @@ def main(argv=None):
 
 
 def package_target(args, command):
-    """The Target for the package `debug` and `decode` read: -o's, else the one
+    """The Target for the package `test` and `decode` read: -o's, else the one
     built (beside the cart, or in dist/)."""
     cart = find_cart(args.source)
     if not cart or not is_cart(cart):
@@ -612,11 +619,33 @@ def decode_command(args):
               " another build?")
 
 
-def debug_command(args):
-    """`ticpak debug`: the package in TIC-80's window until it is closed, all
+def run_command(args):
+    """`ticpak run`: the cart's sources (main.lua, its modules loaded from
+    their files) in TIC-80's window until it is closed, from the cart's
+    folder, where `require` finds them. Its output passes through as it is:
+    errors already name the sources. Exits with TIC-80's status."""
+    cart = find_cart(args.source)
+    if not cart or not is_cart(cart):
+        sys.exit("ticpak: run needs the cart (main.lua): run from its directory,"
+                 " or give its location")
+
+    class Passthrough:
+        feed = staticmethod(raw_write)
+
+        def idle(self):
+            pass
+
+        def close(self):
+            pass
+    print(f"running {fwd(cart)} in TIC-80 (close it, or Ctrl+C here, to stop)")
+    sys.exit(play(cart, Passthrough(), cwd=os.path.dirname(os.path.abspath(cart))))
+
+
+def test_command(args):
+    """`ticpak test`: the package in TIC-80's window until it is closed, all
     it prints passed through, each error in the cart translated back to the
     sources as it happens (errors.Stream). Exits with TIC-80's status."""
-    t = package_target(args, "debug")
+    t = package_target(args, "test")
     if not os.path.isfile(t.output):
         print(f"cart: {fwd(t.output)} (not built yet)")
         build_hint(args, t, package_name(parse_header(cart_code(t.cart))))
@@ -657,7 +686,7 @@ def force_hint(command, check=None):
 
 
 def build_hint(args, t, default_name):
-    """The command that builds a package not built yet (check, debug),
+    """The command that builds a package not built yet (check, test),
     highlighted."""
     command = build_command(args.source, minifier.DEFAULT_OPTIONS, t.name, default_name,
                             args.out)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """`ticpak init`: a new multi-file project - main.lua (the metadata header,
 an entry stub that requires one module, TIC-80's default palette) and the
-module it requires, game.lua. Never prompts: the header takes the same
-defaults the interactive build offers for missing tags.
+module it requires, game.lua. Never prompts: the header has placeholders
+for the tags only the user can fill in.
 """
 import os
 import sys
@@ -20,15 +20,12 @@ PALETTE = ("-- <PALETTE>\n"
            "-- </PALETTE>\n")
 
 
-def lua_string(text):
-    """text as a double-quoted Lua string literal."""
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-# TIC-80's own `new`-cart placeholders, for the tags only the user can fill
-# in: check reports them, and the interactive build asks for them.
+# Placeholders for the tags only the user can fill in (TIC-80's own `new`-cart
+# ones, and ticpak's title and author): check reports them, and the
+# interactive build asks for them.
 PLACEHOLDERS = {
-    "author": "game developer, email, etc.",
+    "title": "my game",
+    "author": "your name or email",
     "desc": "short description",
     "site": "website link",
     "license": "MIT License (change this to your license of choice)",
@@ -52,23 +49,32 @@ def cart_text(meta):
             "\n" + PALETTE)
 
 
-def module_text(title):
-    return f"""\
--- {MODULE}: a sample module. main.lua requires it, so ticpak inlines it into
--- the package. Add more modules beside it, and require each one in main.lua.
+def module_text():
+    return f"""{MODULE} = {{}}
 
-{MODULE} = {{}}
-
-local TITLE = {lua_string(title)}
+local TRAIL = {{2, 14, 15}}
 local t
 
+local function set_color(slot, rgb)
+  local addr = 0x3FC0 + slot * 3
+  poke(addr, rgb >> 16)
+  poke(addr + 1, (rgb >> 8) & 0xFF)
+  poke(addr + 2, rgb & 0xFF)
+end
+
 local function print_center(text, y, color, small)
-  local w = print(text, 0, -8, 0, false, 1, small)   -- off screen: just the width
+  local w = print(text, 0, -8, 0, false, 1, small)
   print(text, (240 - w) // 2, y, color, false, 1, small)
+end
+
+local function dot_x(frame)
+  return 120 + math.sin(frame / 15) * 60
 end
 
 function {MODULE}.init()
   t = 0
+  set_color(14, 0x73283a)
+  set_color(15, 0x3e161d)
 end
 
 function {MODULE}.update()
@@ -77,9 +83,12 @@ end
 
 function {MODULE}.draw()
   cls(0)
-  print_center(TITLE, 50, 12)
-  print_center("edit {MODULE}.lua, then Ctrl+R", 62, 13, true)
-  circ(120 + math.sin(t / 30) * 40, 86, 4, 6)
+  print_center("Edit {MODULE}.lua, then hit CTRL+R", 62, 13, true)
+  for i = #TRAIL, 1, -1 do
+    circ(dot_x(t - i * 2), 86, 4, TRAIL[i])
+  end
+  circ(dot_x(t), 86, 4, 2)
+  circ(dot_x(t), 86, 1, 12)
 end
 """
 
@@ -101,14 +110,12 @@ def init_project(folder=None):
         sys.exit(f"ticpak: {fwd(module)} already exists - init would overwrite it")
     os.makedirs(folder, exist_ok=True)
     meta = {**header_defaults({}, os.path.abspath(cart)), **PLACEHOLDERS}
-    for path, text in ((cart, cart_text(meta)), (module, module_text(meta["title"]))):
+    for path, text in ((cart, cart_text(meta)), (module, module_text())):
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
     print(f"init: wrote {fwd(cart)} (the cart: header, entry stub, palette)"
           f" and {fwd(module)} (the module it requires)")
-    print(f"header: title {meta['title']!r}; {', '.join(PLACEHOLDERS)} are"
-          " placeholders - fill them in before packaging")
-    run = "tic80 main.lua" if folder == "." else f"cd {folder} && tic80 main.lua"
-    print("hint: " + highlight(run) + " to run it in TIC-80 Pro (from the cart's folder)")
-    print("hint: " + highlight("ticpak" + ("" if folder == "." else " " + folder))
-          + " to fill in the header and package it")
+    print(f"header: {', '.join(PLACEHOLDERS)} are placeholders - fill them in"
+          " before packaging")
+    run = "ticpak run" + ("" if folder == "." else " " + folder)
+    print("hint: " + highlight(run) + " to run it in TIC-80")

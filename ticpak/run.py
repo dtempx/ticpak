@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Running TIC-80 for ticpak: find the Pro binary, capture a headless
 run's output, boot the bundle alone then save the .tic, and run a cart in
-its window passing its output on (`ticpak debug`).
+its window passing its output on (`ticpak run`, `ticpak test`).
 """
 import codecs
 import os
@@ -21,51 +21,90 @@ if os.name != "nt":                 # the pty route below is POSIX-only
 from .console import detail, show, step
 from .header import slug
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 BOOT_SECONDS = 10       # the boot run's length: TIC-80's --cli loop never exits
 
 
+# Where TIC-80's own downloads put it, when it is not on PATH.
+MAC_APPS = ("tic80.app", "TIC-80.app")
+LINUX_PATHS = ("/usr/bin/tic80", "/usr/local/bin/tic80")      # the .deb package
+WIN_DOWNLOAD_RE = re.compile(r"^tic80-v(\d+(?:\.\d+)*)-win\.exe$", re.I)
+
+
+def _is_exe(path):
+    return os.path.isfile(path) and (os.name == "nt" or os.access(path, os.X_OK))
+
+
+def _windows_downloads(cwd):
+    """The Downloads folder of the user whose folder (C:/Users/NAME) cwd is
+    in; None when cwd is not under one."""
+    drive, rest = os.path.splitdrive(os.path.abspath(cwd))
+    parts = [p for p in re.split(r"[\\/]", rest) if p]
+    if len(parts) < 2 or parts[0].lower() != "users":
+        return None
+    d = os.path.join(drive + os.sep, parts[0], parts[1], "Downloads")
+    return d if os.path.isdir(d) else None
+
+
+def _windows_download(cwd):
+    """The newest tic80-vX.Y.Z-win.exe in that Downloads folder, or None."""
+    d = _windows_downloads(cwd)
+    if not d:
+        return None
+    found = []
+    for name in os.listdir(d):
+        m = WIN_DOWNLOAD_RE.match(name)
+        if m and os.path.isfile(os.path.join(d, name)):
+            found.append((tuple(map(int, m.group(1).split("."))), name))
+    return os.path.join(d, max(found)[1]) if found else None
+
+
+def installed_tic80(cwd=None):
+    """TIC-80 where its own download installs it: (Windows) the newest
+    tic80-v*-win.exe in the Downloads folder of the user folder the current
+    folder is in; (macOS) the app in /Applications or ~/Applications; (Linux)
+    /usr/bin/tic80 from the .deb, or /usr/local/bin/tic80. None if not there."""
+    if os.name == "nt":
+        return _windows_download(cwd or os.getcwd())
+    if sys.platform == "darwin":
+        paths = [os.path.join(apps, app, "Contents", "MacOS", "tic80")
+                 for apps in ("/Applications", os.path.expanduser("~/Applications"))
+                 for app in MAC_APPS]
+    else:
+        paths = LINUX_PATHS
+    return next((p for p in paths if _is_exe(p)), None)
+
+
 def tic80_exe():
-    """The Pro binary: $TIC80, else tools/tic80.exe (Windows) or
-    tools/tic80/build/bin/tic80 (Linux) in the nearest enclosing directory of
-    this script or the cwd that has one, else `tic80` on PATH."""
+    """The Pro binary: $TIC80, else `tic80` on PATH, else installed_tic80()."""
     env = os.environ.get("TIC80")
     if env and os.path.isfile(env):
         return env
-    for start in (HERE, os.getcwd()):
-        d = os.path.abspath(start)
-        while True:
-            for rel in (("tools", "tic80.exe"), ("tools", "tic80", "build", "bin", "tic80")):
-                p = os.path.join(d, *rel)
-                if os.path.isfile(p):
-                    return p
-            if os.path.dirname(d) == d:
-                break
-            d = os.path.dirname(d)
-    for name in ("tic80", "tic80.exe"):
-        if shutil.which(name):
-            return shutil.which(name)
-    sys.exit("ticpak: no TIC-80 Pro binary found - set $TIC80 to its path, or put tic80 on PATH")
+    found = shutil.which("tic80") or installed_tic80()
+    if found:
+        return found
+    sys.exit("ticpak: no TIC-80 Pro binary found - install TIC-80 Pro"
+             " (https://nesbox.itch.io/tic80), or add tic80 to your PATH"
+             " (or set $TIC80 to its path)")
 
 
-IDLE_SECONDS = 0.3      # `debug`: output this long quiet ends an error's traceback
+IDLE_SECONDS = 0.3      # `test`: output this long quiet ends an error's traceback
 
 
-def play(cart, stream):
-    """`ticpak debug`: TIC-80 in its window, running cart (a .tic or .lua) until
-    it is closed. Everything it prints (its console mirrors to stdout: an
-    error and its traceback too) goes to stream.feed as it comes, and
-    stream.idle() when it pauses. Returns TIC-80's exit status (130 for
-    Ctrl+C, which stops it too)."""
+def play(cart, stream, cwd=None):
+    """`ticpak run` and `test`: TIC-80 in its window, running cart (a .tic or
+    .lua) from cwd until it is closed. Everything it prints (its console
+    mirrors to stdout: an error and its traceback too) goes to stream.feed
+    as it comes, and stream.idle() when it pauses. Returns TIC-80's exit
+    status (130 for Ctrl+C, which stops it too)."""
     cmd = [tic80_exe(), "--skip", os.path.abspath(cart)]
     if os.name == "nt":                 # TIC-80 does not buffer its stdout
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              stdin=subprocess.DEVNULL)
         fd, close = p.stdout.fileno(), p.stdout.close
     else:                               # a pty, as _run_tty: never block-buffered
         fd, slave = pty.openpty()
-        p = subprocess.Popen(cmd, stdout=slave, stderr=slave, stdin=subprocess.DEVNULL,
-                             close_fds=True)
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=slave, stderr=slave,
+                             stdin=subprocess.DEVNULL, close_fds=True)
         os.close(slave)
         close = lambda: os.close(fd)    # noqa: E731
     chunks = queue.Queue()

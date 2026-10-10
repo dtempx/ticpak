@@ -129,7 +129,7 @@ can't be a `.tic`.
 | `x.lua:N starts an asset section (-- <MAP>), but only main.lua's asset sections are packaged` | A module holds asset data, which would be cut off or silently stripped. Move the whole section into `main.lua`'s asset sections, merging with any existing section of the same name. |
 | `no asset chunks found` | `main.lua` has no `-- <TILES>`-style section. Save the cart once from TIC-80 Pro, or add the `PALETTE` section from [init.md](init.md). |
 | `entry stub requires no modules` | `main.lua` has no `require` lines. A single-file cart doesn't need ticpak. |
-| `no TIC-80 Pro binary found` | Set `$TIC80` to the binary, or put `tic80` on PATH. ticpak also checks `tools/tic80.exe` and `tools/tic80/build/bin/tic80` in the nearest folder above. Only Pro reads `.lua` carts, and it is a paid download from itch.io or a source build with `-DBUILD_PRO=On`. |
+| `no TIC-80 Pro binary found` | Set `$TIC80` to the binary, or put `tic80` on PATH. ticpak also looks where TIC-80's download puts it: the newest `tic80-v*-win.exe` in the user's `Downloads` folder (Windows, run from under `C:\Users\<name>`), `/Applications/tic80.app` (macOS), `/usr/bin/tic80` (Linux `.deb`). Only Pro reads `.lua` carts, and it is a paid download from itch.io or a source build with `-DBUILD_PRO=On`. |
 | `-m` option list error naming a path | Write `-m=OPTION,...` with `=`, or put the cart path first. |
 | `X not found` / `X is not a .lua file` | `SOURCE` must be an existing `.lua` file or a folder holding `main.lua`. |
 | `-o X names the output file itself - drop -n` | `-n` goes only with a folder `-o` or none. |
@@ -163,7 +163,7 @@ it only when the user says they copied the error, from TIC-80's console
 (mouse select, Ctrl+C). ticpak rejoins the console's 40-column rows. If
 the clipboard holds no error, it exits 1 with `no error to translate`.
 
-To catch errors while the user plays, `ticpak debug` runs the package in
+To catch errors while the user plays, `ticpak test` runs the package in
 TIC-80's window and prints everything TIC-80 prints, each error already
 decoded. It returns only when the window is closed.
 

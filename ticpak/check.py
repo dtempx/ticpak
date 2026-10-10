@@ -97,10 +97,11 @@ TEXT_SECTION_RE = re.compile(
 REQUIRED_META = ("title", "author", "desc", "site", "license", "version", "script")
 # Tags TIC-80 also reads but a cart may leave out.
 OPTIONAL_META = ("saveid", "input", "menu")
-# TIC-80's `new`-cart placeholder values: present but never filled in.
+# Placeholder values, present but never filled in: TIC-80's `new`-cart ones,
+# and those `ticpak init` writes.
 PLACEHOLDER_META = {
-    "title": ("game title",),
-    "author": ("game developer", "game developer, email, etc."),
+    "title": ("game title", "my game"),
+    "author": ("game developer", "game developer, email, etc.", "your name or email"),
     "desc": ("short description",),
     "site": ("website link",),
     "license": ("mit license (change this to your license of choice)",),

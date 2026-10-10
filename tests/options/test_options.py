@@ -502,8 +502,8 @@ class TestMinifyCommand(unittest.TestCase):
 
 
 class TestInit(unittest.TestCase):
-    """`ticpak init [FOLDER]`: main.lua (a header with TIC-80's placeholders
-    for author, desc, site and license, a stub requiring game, an asset
+    """`ticpak init [FOLDER]`: main.lua (a header with placeholders for
+    title, author, desc, site and license, a stub requiring game, an asset
     section) and game.lua, which bundle and minify; stops,
     writing nothing, when there is a cart already or game.lua is taken."""
 
@@ -519,7 +519,7 @@ class TestInit(unittest.TestCase):
             cli.main(["init", *argv])
 
     def test_new_project_bundles(self):
-        folder = os.path.join(self.tmp, "my game")      # made, as the project's name
+        folder = os.path.join(self.tmp, "space race")   # made; the title asked for
         self.init(folder)
         cart = os.path.join(folder, "main.lua")
         self.assertTrue(bundle.is_cart(cart))
@@ -527,12 +527,13 @@ class TestInit(unittest.TestCase):
         meta = check.parse_header(code)
         self.assertEqual(meta["title"], "my game")
         self.assertEqual(header.incomplete_fields(meta),
-                         ["author", "desc", "site", "license"])
+                         ["title", "author", "desc", "site", "license"])
         header.write_header(cart, header.header_defaults(meta, cart))  # as asked
         code = bundle.cart_code(cart)
         self.assertTrue(check.check_header(code, quiet=True))
+        self.assertEqual(check.parse_header(code)["title"], "space race")
         self.assertEqual(bundle.stub_requires(code)[0], ["game"])
-        t = bundle.Target(cart, "my-game", None)
+        t = bundle.Target(cart, "space-race", None)
         source, chunks, names, _ = bundle.assemble(t)
         self.assertEqual(names, ["game"])
         self.assertIn("-- <PALETTE>", chunks)

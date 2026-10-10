@@ -24,7 +24,7 @@ each line and name in the message and in every traceback frame.
            uses of each renamed variable, the code's hash
   Decode   each case under each preset, decoded == written
   Input    text copied from TIC-80's console rejoined, a log's last error,
-           TIC-80's output decoded as `ticpak debug` reads it
+           TIC-80's output decoded as `ticpak test` reads it
   Command  `ticpak decode`: -e, stdin, the clipboard and --log, the map file
            or a rebuild, a cart that no longer matches its sources, no
            cart, no location, the options it rejects
@@ -926,7 +926,11 @@ class TestCommand(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli.parse_args(["decode", "--log", log, "-e", "x"])
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            cli.parse_args(["debug", "--log", log])
+            cli.parse_args(["test", "--log", log])
+        for argv in (["run", "-m"], ["run", "-o", "x.tic"], ["run", "-f"], ["run", "-q"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli.parse_args(argv)
+        self.assertEqual(cli.parse_args(["run", self.main])[0], "run")
 
 
 class Terminal(io.StringIO):

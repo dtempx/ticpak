@@ -43,8 +43,9 @@ otherwise `check`.
   and exits with status 2. The commands never prompt: anything missing
   becomes an error message. (Give `ticpak decode` the error with `-e TEXT`
   or `--log FILE`. Without them it reads redirected stdin, then the
-  clipboard.) `ticpak debug` opens TIC-80's window and waits until it is
-  closed. Run it only when the user wants to play the cart.
+  clipboard.) `ticpak run` (the sources) and `ticpak test` (the package)
+  open TIC-80's window and wait until it is closed. Run them only when the
+  user wants to play the cart.
   Don't pass `-q`: it prints nothing, so you'd have only the exit status
   to read.
 - **Find the tool.** Check that `ticpak --version` works. If it doesn't, use
@@ -60,8 +61,9 @@ otherwise `check`.
   `src/main.lua`), or pass the cart's path as the first argument.
 - **The metadata header must be complete.** The comment block at the top of
   `main.lua` needs `title`, `author`, `desc`, `site`, `license`, `version`
-  and `script`. Each must be filled in, not left as TIC-80's `new`-cart
-  placeholder ("game title", "website link", ...). tic80.com shows them, and
+  and `script`. Each must be filled in, not left as a placeholder from
+  TIC-80's `new` cart or `ticpak init` ("game title", "my game",
+  "website link", ...). tic80.com shows them, and
   ticpak refuses to build without them. You can take `title` and `desc` from
   the project's README and `author` from git. **Ask the user** for `site`,
   `license` and `version` rather than inventing them.

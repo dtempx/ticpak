@@ -77,8 +77,9 @@ def repo_url(cwd):
 def header_defaults(meta, cart):
     """Suggested values for each required tag (the user can change them)."""
     cwd = os.path.dirname(cart)
-    title = meta.get("title") if meta.get("title") not in (None, "", "game title") \
-        else project_name(cart)
+    title = meta.get("title")
+    if not title or title.lower() in PLACEHOLDER_META["title"]:
+        title = project_name(cart)
     return {
         "title": title,
         "author": _git("config", "user.name", cwd=cwd) or getpass.getuser(),

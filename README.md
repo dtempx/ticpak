@@ -142,7 +142,8 @@ Everything is a subcommand of `ticpak`:
 | `ticpak bundle` | build and check the project's package |
 | `ticpak check` | check the project's built package |
 | `ticpak check FILE...` | check any `.tic` or `.lua` files you name |
-| `ticpak debug` | run the package in TIC-80, its runtime errors translated back to your files, lines and names |
+| `ticpak run` | run `main.lua` (your sources, as they are) in TIC-80 |
+| `ticpak test` | run the package in TIC-80, its runtime errors translated back to your files, lines and names |
 | `ticpak decode` | translate a runtime error from the package (copied, or in a log) back to your files, lines and names |
 | `ticpak minify FILE` | the Lua 5.3 minifier on its own ([docs/minify.md](docs/minify.md)) |
 
@@ -195,19 +196,18 @@ ticpak init mygame     # in mygame/, made if missing
 - **`main.lua`**, the cart: a metadata header, an entry stub
   (`require "game"` and the `BOOT`/`TIC` callbacks calling `game.init`,
   `game.update` and `game.draw`), and TIC-80's default palette as its one
-  asset section. The header has the folder's name as the title, version
-  `0.1`, and TIC-80's own placeholders for author, desc, site and license
-  (`game developer, email, etc.`, `short description`, ...), which
+  asset section. The header has version `0.1` and placeholders for the
+  rest (`my game`, `your name or email`, `short description`, ...), which
   packaging won't accept until they are filled in.
 - **`game.lua`**, a sample module that defines the global table `game` with
-  `init`, `update` and `draw`, drawing the title on screen.
+  `init`, `update` and `draw`, drawing a red dot sweeping across the screen.
 
 If the folder already has a `main.lua` (or `src/main.lua`), `init` stops
 with a message and exit status 1, and writes nothing; likewise if `game.lua`
-is there. Run the new cart with `tic80 main.lua` from its folder. To
+is there. Run the new cart with `ticpak run` (or `ticpak run FOLDER`). To
 package it, edit the header in `main.lua`, or run `ticpak`, which
 [asks for the placeholder tags](#when-the-header-is-incomplete) (offering
-your git `user.name` as the author, the git `origin` URL, else
+the folder's name as the title, your git `user.name` as the author, the git `origin` URL, else
 `https://tic80.com`, as the site, and `MIT License`), writes them in and
 builds.
 
@@ -278,7 +278,8 @@ release. `main.lua` and the modules stay your sources.
 ticpak init [FOLDER] [-q]
 ticpak [bundle | check] [SOURCE] [options]
 ticpak check FILE... [-q]
-ticpak debug [SOURCE] [-o PATH] [-n NAME] [-m...]
+ticpak run [SOURCE]
+ticpak test [SOURCE] [-o PATH] [-n NAME] [-m...]
 ticpak decode [SOURCE] [-o PATH] [-n NAME] [-m...] [-e TEXT | -l FILE]
 ticpak minify [options] FILE
 ```
@@ -290,12 +291,13 @@ ticpak minify [options] FILE
 | `bundle` | builds and checks, or does nothing when the cart is up to date | never |
 | `check` | checks the project's existing `.tic` without building | never |
 | `check FILE...` | checks exactly the files named ([below](#checking-any-file)) | never |
-| `debug` | runs the package in TIC-80's window until you close it, translating its errors as they happen ([below](#errors-from-the-packaged-cart)) | never |
+| `run` | runs `main.lua` in TIC-80's window until you close it, from the cart's folder so `require` loads the modules from their files; passes on what TIC-80 prints | never |
+| `test` | runs the package in TIC-80's window until you close it, translating its errors as they happen ([below](#errors-from-the-packaged-cart)) | never |
 | `decode` | translates an error from the packaged cart back to the sources ([below](#errors-from-the-packaged-cart)) | never; at a terminal, asks you to paste the error when the clipboard holds none |
 | `minify FILE` | the minifier on its own ([below](#the-minifier-on-its-own)) | never |
 
-`init`, `bundle`, `check`, `debug` and `decode` never ask questions, so they are the forms for
-scripts, CI and AI agents (`debug` waits until TIC-80 is closed). Anything
+`init`, `bundle`, `check`, `run`, `test` and `decode` never ask questions, so they are the forms for
+scripts, CI and AI agents (`run` and `test` wait until TIC-80 is closed). Anything
 missing is an error message saying what is needed.
 
 | Option | Meaning |
@@ -336,7 +338,8 @@ ticpak bundle -o dist/           # dist/<name>.tic, .lua and .bundle.txt (the re
 ticpak bundle path/to/main.lua   # a cart elsewhere (or its folder)
 ticpak bundle enemies.lua -m     # one module, minified, to enemies.min.lua
 ticpak check main.lua mygame.tic   # check these two files: full report
-ticpak debug                    # run the .tic in TIC-80, its errors in your files and names
+ticpak run                      # run main.lua in TIC-80 (the sources, as they are)
+ticpak test                     # run the .tic in TIC-80, its errors in your files and names
 ticpak decode                   # the error copied from TIC-80's console, translated
 ticpak decode --log tic80.log   # the last error in a log of TIC-80's output
 ticpak minify enemies.lua        # one module, minified, to stdout
@@ -416,7 +419,7 @@ stack traceback:
 	[string "-- title:  My Game..."]:14: in function 'TIC'
 ```
 
-`ticpak debug` and `ticpak decode` translate it back. `ticpak debug` runs the
+`ticpak test` and `ticpak decode` translate it back. `ticpak test` runs the
 package in TIC-80's window and passes on everything TIC-80 prints (its
 console, `trace` included, goes to its standard output too), translating
 each error as it happens. Close the window, or press Ctrl+C, to stop it. An
@@ -462,7 +465,7 @@ the same function on one bundle line, say) it gives the range,
 `main.lua:15-16`.
 
 Both find the cart as `check` does (`<name>.tic` beside `main.lua` or in
-`dist/`; `-o` and `-n` for another), and need its sources. (`debug` runs the
+`dist/`; `-o` and `-n` for another), and need its sources. (`test` runs the
 cart as built, and says so when the sources have changed since.) The cart's
 `-- ticpak:` line says how it was built, and minifying is deterministic, so
 ticpak rebuilds the sources the same way in memory and checks that the
@@ -543,7 +546,7 @@ with a folder, the `.tic`, with the `.lua` and the report beside it) is newer
 than `main.lua` and every module. `bundle` skips an up-to-date cart, so running it
 on every save is cheap; it still prints the summary, then a hint that repeats
 your command with `-f`, such as `hint: ticpak bundle -f -m -o dist/ to force
-rebuild`, and one with the matching `ticpak check`. `check` and `debug` on a
+rebuild`, and one with the matching `ticpak check`. `check` and `test` on a
 cart not built yet stop (status 1) with the command that builds it, such as
 `hint: ticpak bundle -m to build`. Only file timestamps count, so after changing `-m` or upgrading
 ticpak, use `bundle -f`. When your `-m` differs from the one the output was
@@ -857,12 +860,28 @@ module (its tag alone on the line) stops the build either way: move it into
 
 The boot test and the `.tic` save run TIC-80 **Pro** headless. Pro is a paid
 download from [itch.io](https://nesbox.itch.io/tic80), or build it from source
-with `-DBUILD_PRO=On`. ticpak looks for it in this order:
+with `-DBUILD_PRO=On`. ticpak looks for it in this order, and uses the
+first it finds:
 
-1. `$TIC80`, if set;
-2. `tools/tic80.exe` (Windows) or `tools/tic80/build/bin/tic80` (Linux), in
-   the nearest folder above the current folder that has one;
-3. `tic80` on `PATH`.
+1. `$TIC80`, if set to the binary's path;
+2. `tic80` on `PATH`;
+3. where TIC-80's own download puts it:
+   - **Windows**: your `Downloads` folder, for a file named
+     `tic80-v<version>-win.exe` (`tic80-v1.3-win.exe`, say), the highest
+     version if there are several. ticpak works out which `Downloads` folder
+     from the current folder: when you run it somewhere under
+     `C:\Users\<you>\`, it looks in `C:\Users\<you>\Downloads`. Run from
+     anywhere else, it skips this step;
+   - **macOS**: the app dragged from the `.dmg`, `tic80.app` (or `TIC-80.app`)
+     in `/Applications` or `~/Applications`;
+   - **Linux**: `/usr/bin/tic80`, where the `.deb` package installs it, or
+     `/usr/local/bin/tic80`.
+
+ticpak doesn't search the disk beyond these. If none has it, ticpak stops with
+`ticpak: no TIC-80 Pro binary found - install TIC-80 Pro
+(https://nesbox.itch.io/tic80), or add tic80 to your PATH (or set $TIC80 to
+its path)`. ticpak doesn't check that the binary it finds is Pro: a free
+build fails the boot test.
 
 ## Output
 
@@ -1085,13 +1104,13 @@ new session, so it reads the new version.
 |---|---|
 | `ticpak/cli.py` | the command line, `--help`, the interactive questions, `main()` |
 | `ticpak/bundle.py` | finds the cart, resolves `-o` into the outputs to keep, inlines the modules, minifies, writes `<name>.lua` and the decode maps; a module on its own; the up-to-date check; the `-- <` guard |
-| `ticpak/run.py` | finds TIC-80 Pro, boots the bundle headless, saves `<name>.tic`; runs a cart in its window for `ticpak debug` |
+| `ticpak/run.py` | finds TIC-80 Pro, boots the bundle headless, saves `<name>.tic`; runs a cart in its window for `ticpak run` and `ticpak test` |
 | `ticpak/report.py` | the summary, the `--verbose` detail (the minify savings table included), the `-r` report file |
 | `ticpak/header.py` | the metadata header: the output name, missing tags, filling them in |
 | `ticpak/scaffold.py` | `ticpak init`: a new project's `main.lua` and `game.lua` |
 | `ticpak/console.py` | console output and the prompts (questionary or plain) |
 | `ticpak/check.py` | the `.tic` limit and header checker (`ticpak check FILE...`) |
-| `ticpak/errors.py` | `ticpak decode` and `debug`: finds the decode map for a cart (its map file, or a rebuild checked against it) and translates an error with it; reads the clipboard, rejoins text copied from TIC-80's console, finds a log's last error, and translates TIC-80's output as it runs |
+| `ticpak/errors.py` | `ticpak decode` and `test`: finds the decode map for a cart (its map file, or a rebuild checked against it) and translates an error with it; reads the clipboard, rejoins text copied from TIC-80's console, finds a log's last error, and translates TIC-80's output as it runs |
 | `ticpak/minify.py` | the minifier (`ticpak minify`; [docs/minify.md](docs/minify.md), [docs/minify-spec.md](docs/minify-spec.md)) |
 
 `scripts/update_reserved.py` refreshes the minifier's list of TIC-80 API
@@ -1111,7 +1130,7 @@ the sources as written and from the packaged cart (loaded as TIC-80 loads
 it), and checks that `ticpak decode` turns the second into the first under
 every minify preset. It also checks where the error text comes from: text
 copied from TIC-80's console (laid out as `console.c` lays it out) rejoined,
-a log's last error, and TIC-80's output as `ticpak debug` reads it.
+a log's last error, and TIC-80's output as `ticpak test` reads it.
 
 `tests/options` builds sample carts with every subset of minify options and
 runs the original and minified code side by side in Lua 5.3, comparing what

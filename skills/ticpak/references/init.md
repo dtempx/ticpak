@@ -82,12 +82,12 @@ function TIC() game_update() game_draw() end
    header, the stub `require "game"` with `BOOT` and `TIC` calling
    `game.init`, `game.update` and `game.draw`, and the default `PALETTE`
    section) and `game.lua`, a module defining the global table `game`,
-   which draws the title. If a `main.lua`, `src/main.lua` or `game.lua` is
+   which draws a red dot sweeping across the screen. If a `main.lua`, `src/main.lua` or `game.lua` is
    there already it stops with `ticpak: <path> already exists - ...`, exit
    status 1, and writes nothing: use the other rows of the table above
    instead.
-2. The header has the folder's name as `title`, `0.1` as `version`, and
-   TIC-80's placeholders for `author`, `desc`, `site` and `license`, which
+2. The header has `0.1` as `version` and placeholders for `title` (`my
+   game`), `author`, `desc`, `site` and `license`, which
    `ticpak bundle` rejects (`header: INCOMPLETE`). Ask the user for the
    author, title, a one-line description, `site`, `license` and `version`,
    and edit those lines in `main.lua`.
@@ -129,16 +129,12 @@ Report what you find, fix it if the user agrees, then run `ticpak bundle -f`.
 
 ## The dev loop
 
-- **Launch TIC-80 Pro with the cart's folder as the working directory.**
-  `require` searches `.\?.lua` relative to the process's current directory,
-  not the cart's folder:
-
-  ```
-  cd mygame
-  tic80 main.lua
-  ```
-
-  Launched from anywhere else, it fails with `module '...' not found`.
+- **Run the sources with `ticpak run`** (or `ticpak run FOLDER`). It
+  launches TIC-80 Pro on `main.lua` with the cart's folder as the working
+  directory, which `require` needs: it searches `.\?.lua` relative to the
+  process's current directory, not the cart's folder. Launched by hand from
+  anywhere else, `tic80 main.lua` fails with `module '...' not found`.
+  `ticpak test` runs the built package instead.
 - **Edit modules, then press Ctrl+R** (or type `run` in the console). Each run
   starts a fresh Lua VM, so it reloads every module. TIC-80's auto-reload
   watches only `main.lua`.
