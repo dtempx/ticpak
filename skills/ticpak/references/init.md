@@ -91,7 +91,9 @@ function TIC() game_update() game_draw() end
    `ticpak bundle` rejects (`header: INCOMPLETE`). Ask the user for the
    author, title, a one-line description, `site`, `license` and `version`,
    and edit those lines in `main.lua`.
-3. Add `*.tic` and `dist/` to `.gitignore`.
+3. `init` adds `*.tic`, `dist/` and `.local/` to the folder's `.gitignore`
+   (made if missing). If the project's git repository starts higher up,
+   check that its `.gitignore` covers them too.
 4. Run `ticpak bundle -f` to prove the bundle boots on its own (see
    [bundle.md](bundle.md)), and tell the user how to run it while developing.
 
@@ -134,7 +136,20 @@ Report what you find, fix it if the user agrees, then run `ticpak bundle -f`.
   directory, which `require` needs: it searches `.\?.lua` relative to the
   process's current directory, not the cart's folder. Launched by hand from
   anywhere else, `tic80 main.lua` fails with `module '...' not found`.
-  `ticpak test` runs the built package instead.
+  It also makes that folder TIC-80's file system (`--fs`), so saving from
+  TIC-80's editors writes `main.lua` back in place. TIC-80 keeps its data
+  in a `.local/` folder there (`init`'s `.gitignore` covers it), including
+  its settings (`.local/<build>/config.tic`), so each project has its own
+  TIC-80 settings. Each `run` first copies the file it runs to
+  `.local/backup/` (one copy, replaced each time); `ticpak restore` swaps it
+  back in if it differs (running it again swaps back), after asking - pass `-y`, since you have no terminal
+  to answer on, and only when the user asks for the restore. Before starting
+  TIC-80, `run` checks that every required module's file exists (a missing
+  one stops it, status 1) and prints `WARN` for what would run but not
+  package. It prints errors with paths from the current folder
+  (`mygame/game.lua:19`) and the source line after them. Options after `--`
+  go to TIC-80 (`ticpak run -- --scale=4`). It exits 0 when TIC-80 is
+  closed. `ticpak test` runs the built package instead.
 - **Edit modules, then press Ctrl+R** (or type `run` in the console). Each run
   starts a fresh Lua VM, so it reloads every module. TIC-80's auto-reload
   watches only `main.lua`.

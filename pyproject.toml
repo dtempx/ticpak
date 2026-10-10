@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ticpak"
-version = "0.4.7"
+version = "0.4.8"
 description = "Package a multi-file TIC-80 Lua project into one distributable cart: inline the modules, minify, boot-test headless, save the .tic and check its limits."
 readme = "README.md"
 license = "MIT"

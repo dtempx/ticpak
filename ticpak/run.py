@@ -108,15 +108,42 @@ def tic80_exe():
 
 
 IDLE_SECONDS = 0.3      # `test`: output this long quiet ends an error's traceback
+# `run`: TIC-80 keeps .local/ in its --fs folder; ticpak keeps the copy of
+# the file it runs, made before each run, in .local/backup/ beside it
+BACKUP_DIR = os.path.join(".local", "backup")
 
 
-def play(cart, stream, cwd=None):
+def backup_path(path):
+    """Where `ticpak run` keeps its copy of path: .local/backup/<name>."""
+    return os.path.join(os.path.dirname(os.path.abspath(path)), BACKUP_DIR,
+                        os.path.basename(path))
+
+
+def make_backup(path):
+    """Copy path to backup_path(path), replacing the last copy; the copy's
+    modified time is when it was made. Returns the copy's path."""
+    dest = backup_path(path)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    shutil.copyfile(path, dest)
+    return dest
+
+
+def play(cart, stream, cwd=None, fs=False, extra=()):
     """`ticpak run` and `test`: TIC-80 in its window, running cart (a .tic or
-    .lua) from cwd until it is closed. Everything it prints (its console
-    mirrors to stdout: an error and its traceback too) goes to stream.feed
-    as it comes, and stream.idle() when it pauses. Returns TIC-80's exit
-    status (130 for Ctrl+C, which stops it too)."""
-    cmd = [tic80_exe(), "--skip", os.path.abspath(cart)]
+    .lua) from cwd until it is closed. fs (`run`): TIC-80's file system is
+    the cart's folder, so a save from its editors writes the cart there.
+    extra: more options for TIC-80 (--scale=4, ...). Everything it prints
+    (its console mirrors to stdout: an error and its traceback too) goes to
+    stream.feed as it comes, and stream.idle() when it pauses. Returns 0
+    once it ends, 130 for Ctrl+C (which stops it too): TIC-80's own status
+    says nothing, as with its output captured it reports a crash
+    (0xC0000374 on Windows) on a normal close."""
+    cart = os.path.abspath(cart)
+    if fs:                              # the cart by its name within that folder
+        cwd = os.path.dirname(cart)
+        cmd = [tic80_exe(), "--skip", f"--fs={cwd}", *extra, os.path.basename(cart)]
+    else:
+        cmd = [tic80_exe(), "--skip", *extra, cart]
     if os.name == "nt":                 # TIC-80 does not buffer its stdout
         p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              stdin=subprocess.DEVNULL)
@@ -156,9 +183,9 @@ def play(cart, stream, cwd=None):
         status = 130
     stream.feed(decoder.decode(b"", final=True))
     stream.close()
-    rc = p.wait()
+    p.wait()
     close()
-    return rc if status is None else status
+    return 0 if status is None else status
 
 
 def _run_tty(cmd, cwd, timeout):

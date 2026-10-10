@@ -555,7 +555,7 @@ class Stream:
             self.error.append(line)
             return
         self.flush()
-        if is_message(line):
+        if self.starts_error(line):
             self.error = [line]
         else:
             self.write(line + "\n")
@@ -563,7 +563,7 @@ class Stream:
     def idle(self):
         """Nothing more for a moment: the error so far is all of it."""
         if self.partial and (self.error and TRACE_RE.match(self.partial)
-                             or is_message(self.partial)):
+                             or self.starts_error(self.partial)):
             self.line(self.partial)
             self.partial = ""
         self.flush()
@@ -581,10 +581,88 @@ class Stream:
         if not self.error:
             return
         text, self.error = "\n".join(self.error), []
+        self.write(self.render(text) + "\n")
+
+    def starts_error(self, line):
+        return is_message(line)
+
+    def render(self, text):
+        """An error, whole: decoded if it is the cart's."""
         if self.dec is False:
             self.dec = self.make_decoder()
         dec = self.dec
         if dec and any(dec.ours(m.group("chunk")) for m in LOC_RE.finditer(text)):
             out, first, _ = decode(text, dec)
             text = out + source_note(self.cart_dir, first)
-        self.write(text + "\n")
+        return text
+
+
+# A location in the sources as `ticpak run` sees them: the cart's chunk, or a
+# module file `require` loaded from the cart's folder (.\game.lua:19)
+SRC_LOC_RE = re.compile(LOC + r"|(?:\.[\\/])?(?P<file>[\w.\\/-]+\.lua):(?P<fline>\d+)")
+
+
+def link(path):
+    """path as a terminal shows it clickably: relative to the current folder
+    when inside it, else absolute; forward slashes."""
+    try:
+        rel = os.path.relpath(path)
+    except ValueError:                  # (Windows) another drive
+        rel = ".."
+    return (path if rel.startswith("..") else rel).replace(os.sep, "/")
+
+
+class RunStream(Stream):
+    """TIC-80's output as `ticpak run` shows it: as it is, but for its errors,
+    each held until it is whole (as Stream does), then each location in it
+    (the cart's chunk, .\\game.lua) written as a path to the source from the
+    current folder, and the error's source line after it.
+
+    cart: the file TIC-80 runs; its chunk is the cart's only for a .lua."""
+
+    def __init__(self, cart, write):
+        super().__init__(None, os.path.dirname(cart), write)
+        self.cart = cart
+        self.first_line = None
+        if cart.lower().endswith(".lua"):
+            try:
+                with open(cart, encoding="utf-8", errors="replace") as f:
+                    self.first_line = f.readline().rstrip("\r\n")
+            except OSError:
+                pass
+
+    def where(self, m):
+        """(path, line) of a SRC_LOC_RE match in the sources, or None."""
+        if m.group("file"):
+            path = os.path.normpath(os.path.join(self.cart_dir, m.group("file")))
+            return (path, int(m.group("fline"))) if os.path.isfile(path) else None
+        chunk = m.group("chunk")
+        chunk = chunk[:-3] if chunk.endswith("...") else chunk
+        if self.first_line is not None and self.first_line.startswith(chunk):
+            return self.cart, int(m.group("line"))
+        return None
+
+    def starts_error(self, line):
+        """A Lua error message: a location in the sources, then `:`."""
+        return (not TRACE_RE.match(line)
+                and any(line[m.end():m.end() + 1] == ":" and self.where(m)
+                        for m in SRC_LOC_RE.finditer(line)))
+
+    def render(self, text):
+        found = []
+
+        def sub(m):
+            w = self.where(m)
+            if not w:
+                return m.group(0)
+            found.append(w)
+            return f"{link(w[0])}:{w[1]}"
+        lines = text.split("\n")
+        lines[0] = SRC_LOC_RE.sub(sub, lines[0].lstrip(">"))
+        first = found[0] if found else None
+        lines[1:] = [SRC_LOC_RE.sub(sub, line) for line in lines[1:]]
+        text = "\n".join(lines)
+        source = source_line(self.cart_dir, first) if first else None
+        if source is not None:
+            text += f"\n\nsource: {link(first[0])}:{first[1]}\n    {source.strip()}"
+        return text

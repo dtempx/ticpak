@@ -20,24 +20,26 @@ work:
 """
 import argparse
 import contextlib
+import difflib
 import io
 import os
 import shutil
 import sys
 import tempfile
+import time
 
 from . import __version__, console, errors
 from . import minify as minifier
 from .scaffold import init_project
 from .bundle import (DEFAULT_DIR, Target, built_options, built_target, bundle,
-                     check_sources, find_cart, freshness, is_bundle, is_cart, minify_flag, minify_module, options_label,
+                     check_sources, find_cart, freshness, is_bundle, is_cart, minify_flag, run_problems, minify_module, options_label,
                      out_kind, save_bundle, stub_requires, unminified_size)
 from .check import check_lua, check_tic, parse_header
 from .console import FlatStdout, Progress, Prompts, fwd, has_terminal, highlight, show
 from .header import META_KEYS, cart_code, ensure_header, package_name, slug
 from .report import (check_summary, kb, made_of_lines, savings_table, size_summary,
                      write_report)
-from .run import BOOT_SECONDS, play, verify
+from .run import BOOT_SECONDS, backup_path, make_backup, play, verify
 
 EXAMPLES = """examples (run from the port's directory, the one holding main.lua):
   ticpak init                     a new project here: main.lua and game.lua
@@ -63,6 +65,8 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak check main.lua dist/x.tic   check exactly these files: full report
   ticpak run                      run main.lua (the sources) in TIC-80
   ticpak run other.lua            ...or the .lua or .tic named
+  ticpak run -- --scale=4         ...passing TIC-80 the options after --
+  ticpak restore                  put back main.lua as it was when run last started
   ticpak test                     run the package in TIC-80, its errors in the
                                    sources' files, lines and names
   ticpak test dist/mygame.tic     ...that package
@@ -75,7 +79,7 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
 full documentation: https://github.com/dtempx/ticpak#readme
 """
 
-COMMANDS = ("init", "bundle", "check", "run", "test", "decode")  # `minify`: dispatched before argparse
+COMMANDS = ("init", "bundle", "check", "run", "restore", "test", "decode")  # `minify`: dispatched before argparse
 
 
 def minify_arg(text):
@@ -213,7 +217,7 @@ def parse_args(argv):
     """(command or None, argparse namespace, parser) for a command line."""
     ap = argparse.ArgumentParser(
         prog="ticpak",
-        usage="%(prog)s [init | bundle | check | run | test | decode | minify] [SOURCE] [options]",
+        usage="%(prog)s [init | bundle | check | run | restore | test | decode | minify] [SOURCE] [options]",
         description="Package a TIC-80 cart for distribution: inline its modules,"
                     " minify, boot-test headless, save the .tic, and check it."
                     " `init [FOLDER]` starts a new project (main.lua and a"
@@ -222,7 +226,8 @@ def parse_args(argv):
                     " `bundle` (skips an up-to-date package unless --force) and"
                     " `check` run without prompts, for automation. `check FILE...`"
                     " checks the named .tic/.lua files instead of the project's"
-                    " package; `run` runs main.lua in TIC-80 as it is; `test`"
+                    " package; `run` runs main.lua in TIC-80 as it is (backing"
+                    " it up first: `restore` puts the copy back); `test`"
                     " runs the package in TIC-80, translating"
                     " its errors back to the sources as they happen; `decode`"
                     " translates one afterwards (from the clipboard, a log,"
@@ -285,10 +290,22 @@ def parse_args(argv):
     ap.add_argument("-l", "--log", metavar="FILE",
                     help="decode: translate the last error in FILE, a log of"
                          " TIC-80's output")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="restore: restore without asking (needed without a"
+                         " terminal)")
     # The command is peeled off by hand: argparse cannot tell an optional
     # subcommand from the optional SOURCE positional.
     command = argv[0] if argv and argv[0] in COMMANDS else None
+    # run, test: anything after `--` goes to TIC-80 (--scale=4, --fullscreen)
+    argv = list(argv)
+    extra = argv[argv.index("--") + 1:] if "--" in argv else []
+    if "--" in argv:
+        argv = argv[:argv.index("--")]
     args = ap.parse_args(argv[1:] if command else argv)
+    args.tic80_args = extra
+    if extra and command not in ("run", "test"):
+        ap.error("options after -- are for TIC-80, with run or test:"
+                 " ticpak run -- --scale=4")
     if command == "init":
         if (args.force or args.report or args.out or args.name or args.minify
                 or args.error_text is not None or args.log or args.verbose):
@@ -297,7 +314,15 @@ def parse_args(argv):
             ap.error("init: give one folder")
     if command == "run" and (args.force or args.report or args.quiet or args.out
                              or args.name or args.minify is not None or args.verbose):
-        ap.error("run takes only the cart (SOURCE): it runs main.lua as it is")
+        ap.error("run takes only the cart (SOURCE) and, after --, options for"
+                 " TIC-80: it runs main.lua as it is")
+    if command == "restore" and (args.force or args.report or args.quiet or args.out
+                                 or args.name or args.minify is not None
+                                 or args.verbose or args.error_text is not None
+                                 or args.log):
+        ap.error("restore takes only the cart (SOURCE), or the file run ran, and -y")
+    if args.yes and command != "restore":
+        ap.error("--yes applies to the restore command: ticpak restore -y")
     if command in ("check", "test", "decode") and args.force:
         ap.error(f"--force applies to bundle, not {command}")
     if command in ("test", "decode") and (args.report or args.quiet):
@@ -417,6 +442,9 @@ def main(argv=None):
         return
     if command == "run":
         run_command(args)
+        return
+    if command == "restore":
+        restore_command(args)
         return
     if command == "test":
         test_command(args)
@@ -648,16 +676,101 @@ def run_command(args):
     """`ticpak run [FILE]`: the cart's sources (main.lua, its modules loaded
     from their files), or the .lua or .tic named, in TIC-80's window until
     it is closed, from that file's folder, where `require` finds the
-    modules. Its output passes through as it is: errors already name the
-    sources. Exits with TIC-80's status."""
+    modules; that folder is also TIC-80's file system (--fs), so a save from
+    its editors writes the file there. A cart's required modules are checked
+    first (run_problems): a missing one stops it, and what would not package
+    is a warning. Its output passes through, but for errors, which already
+    name the sources: errors.RunStream makes their locations paths from the
+    current folder and adds the source line. Before TIC-80 starts, the file
+    is copied to .local/backup/ (`ticpak restore` puts it back). Exits 0
+    once TIC-80 is closed."""
+    path = run_file(args, "run")
+    if path.lower().endswith(".lua") and is_cart(path):
+        missing, warnings = run_problems(path)
+        for w in warnings:
+            print(f"  WARN  {w}")
+        if missing:
+            for name, mpath, parent in missing:
+                by = f"{parent.replace('.', '/')}.lua" if parent else os.path.basename(path)
+                print(f"  ERROR  module '{name}' not found at {fwd(mpath)}"
+                      f" ({by} requires it)")
+            sys.exit(f"ticpak: run: {len(missing)} required module"
+                     f"{'s' if len(missing) > 1 else ''} missing - create"
+                     f" {'them' if len(missing) > 1 else 'it'}, or fix the require")
+    print(f"backup: {fwd(make_backup(path))} (ticpak restore puts it back)")
+    print(f"running {fwd(path)} in TIC-80 (close it, or Ctrl+C here, to stop)")
+    sys.exit(play(path, errors.RunStream(path, raw_write), fs=True, extra=args.tic80_args))
+
+
+def run_file(args, command):
+    """The file `run` runs (and `restore` restores): SOURCE when it names a
+    .lua or .tic, else the cart (main.lua)."""
     path = given_file(args)
     if not path:
         path = find_cart(args.source)
         if not path or not is_cart(path):
-            sys.exit("ticpak: run needs the cart (main.lua): run from its directory,"
-                     " or give its location (or a .lua or .tic to run)")
-    print(f"running {fwd(path)} in TIC-80 (close it, or Ctrl+C here, to stop)")
-    sys.exit(play(path, Passthrough(), cwd=os.path.dirname(path)))
+            sys.exit(f"ticpak: {command} needs the cart (main.lua): run from its"
+                     " directory, or give its location (or a .lua or .tic to run)")
+    return path
+
+
+def ago(seconds):
+    """A span of time in words: 40 seconds, 5 minutes, 3 hours, 2 days."""
+    s = abs(int(seconds))
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if s >= size:
+            n = s // size
+            return f"{n} {unit}{'s' if n != 1 else ''}"
+    return f"{s} second{'s' if s != 1 else ''}"
+
+
+def restore_command(args):
+    """`ticpak restore [FILE]`: put back the copy `run` made of the file it
+    ran (main.lua, or the file named) when it last started. Says when the
+    copy was made, relative to when the file was last modified, and how
+    many lines differ; restores only when they differ, after asking (or with
+    -y; without a terminal, -y is needed). Restoring swaps the two, so the
+    backup then holds the version replaced, and restoring again undoes it."""
+    path = run_file(args, "restore")
+    backup = backup_path(path)
+    if not os.path.isfile(backup):
+        sys.exit(f"ticpak: no backup of {fwd(path)} - ticpak run makes one each"
+                 f" time it starts ({fwd(backup)})")
+    made, changed = os.path.getmtime(backup), os.path.getmtime(path)
+    print(f"backup: {fwd(backup)}, made {time.strftime('%Y-%m-%d %H:%M', time.localtime(made))}")
+    with open(path, "rb") as f:
+        current = f.read()
+    with open(backup, "rb") as f:
+        saved = f.read()
+    if current == saved:
+        print(f"{fwd(path)} was not modified since the backup: nothing to restore")
+        return
+    when = (f"{ago(changed - made)} before" if made > changed
+            else f"{ago(changed - made)} after")
+    match = difflib.SequenceMatcher(None, saved.decode("utf-8", "replace").splitlines(),
+                                    current.decode("utf-8", "replace").splitlines(),
+                                    autojunk=False)
+    differ = sum(max(i2 - i1, j2 - j1)          # a changed line counts once
+                 for tag, i1, i2, j1, j2 in match.get_opcodes() if tag != "equal")
+    print(f"{fwd(path)} was modified"
+          f" {time.strftime('%Y-%m-%d %H:%M', time.localtime(changed))},"
+          f" {when} the backup was made;"
+          f" {differ} line{'s differ' if differ != 1 else ' differs'}")
+    if not args.yes:
+        if not has_terminal():
+            sys.exit("ticpak: restore: no terminal to ask on - give -y to restore"
+                     " without asking")
+        if not Prompts().confirm(f"Restore {fwd(path)} from the backup?", default=False):
+            print("restore: kept as it is")
+            return
+    with open(path, "wb") as f:         # a swap: the backup keeps what was replaced
+        f.write(saved)
+    with open(backup, "wb") as f:
+        f.write(current)
+    print(f"restore: {fwd(path)} restored from the backup; the backup now holds"
+          " the version it replaced")
+    again = join_command(["ticpak", "restore"] + ([args.source] if args.source else []))
+    print("hint: " + highlight(again) + " again to swap them back")
 
 
 def package_file_target(args, path):
@@ -677,15 +790,17 @@ def package_file_target(args, path):
 
 def test_command(args):
     """`ticpak test [FILE]`: the package (or the .tic or built .lua named) in
-    TIC-80's window until it is closed, all it prints passed through, each error in the cart translated back to the
-    sources as it happens (errors.Stream). Exits with TIC-80's status."""
+    TIC-80's window until it is closed, all it prints passed through, each
+    error in the cart translated back to the sources as it happens
+    (errors.Stream). Exits 0 once TIC-80 is closed."""
     path = given_file(args)
     if path and (path.lower().endswith(".tic") or is_bundle(path)):
         t = package_file_target(args, path)
         if t is None:                   # no sources: nothing to translate to
             print(f"running {fwd(path)} in TIC-80 (close it, or Ctrl+C here, to stop);"
                   " no cart (main.lua) found, so errors are shown as they are")
-            sys.exit(play(path, Passthrough(), cwd=os.path.dirname(path)))
+            sys.exit(play(path, Passthrough(), cwd=os.path.dirname(path),
+                          extra=args.tic80_args))
     else:
         if path and not is_cart(path):
             sys.exit(f"ticpak: {fwd(path)} is not a package ticpak built - run it"
@@ -712,7 +827,8 @@ def test_command(args):
         return dec
     print(f"running {fwd(t.output)} in TIC-80 (close it, or Ctrl+C here, to stop);"
           " errors are translated to the sources")
-    sys.exit(play(t.output, errors.Stream(decoder, t.cart_dir, raw_write)))
+    sys.exit(play(t.output, errors.Stream(decoder, t.cart_dir, raw_write),
+                  extra=args.tic80_args))
 
 
 def build_plan(minify):

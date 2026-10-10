@@ -191,7 +191,7 @@ ticpak init            # in the current folder
 ticpak init mygame     # in mygame/, made if missing
 ```
 
-`init` writes two files and asks nothing:
+`init` writes two files, adds to a third, and asks nothing:
 
 - **`main.lua`**, the cart: a metadata header, an entry stub
   (`require "game"` and the `BOOT`/`TIC` callbacks calling `game.init`,
@@ -201,6 +201,10 @@ ticpak init mygame     # in mygame/, made if missing
   packaging won't accept until they are filled in.
 - **`game.lua`**, a sample module that defines the global table `game` with
   `init`, `update` and `draw`, drawing a red dot sweeping across the screen.
+- **`.gitignore`**, made if missing: `init` adds whichever of `*.tic`,
+  `dist/` (ticpak's outputs) and `.local/` (the cache TIC-80 keeps when
+  [`ticpak run`](#running-your-game-while-you-work) runs it) it doesn't list
+  yet, keeping what's there.
 
 If the folder already has a `main.lua` (or `src/main.lua`), `init` stops
 with a message and exit status 1, and writes nothing; likewise if `game.lua`
@@ -210,6 +214,129 @@ package it, edit the header in `main.lua`, or run `ticpak`, which
 the folder's name as the title, your git `user.name` as the author, the git `origin` URL, else
 `https://tic80.com`, as the site, and `MIT License`), writes them in and
 builds.
+
+### Running your game while you work
+
+```
+ticpak run                    # main.lua in the current folder (or ./src)
+ticpak run mygame             # the cart in mygame/
+ticpak run other.lua          # any .lua or .tic
+ticpak run -- --scale=4       # options after -- go to TIC-80
+ticpak restore                # put main.lua back as it was when run last started
+```
+
+`ticpak run` opens your sources in TIC-80 Pro's window and passes on what
+TIC-80 prints until you close it. You could start TIC-80 yourself, but `run`
+gets three things right that are easy to get wrong:
+
+- **It finds TIC-80.** It uses the same search as a build
+  ([The TIC-80 binary](#the-tic-80-binary)), so `tic80` doesn't need to be on
+  your `PATH`, and the `tic80:` line it prints says which binary it used.
+- **It runs TIC-80 in the cart's folder.** That folder is both the working
+  directory and TIC-80's file system (`--fs`):
+  - `require "game"` finds `game.lua` beside `main.lua`. TIC-80 looks for
+    modules in the current directory, so a cart started from anywhere else
+    fails with `module 'game' not found`.
+  - When you change sprites, the map, sound or music in TIC-80's editors and
+    save (Ctrl+S), TIC-80 writes the cart back to your `main.lua`. Without
+    `--fs`, TIC-80 uses its own default folder, so a save could land
+    somewhere you didn't mean and leave your `main.lua` unchanged.
+- **It keeps each project's TIC-80 to itself.** With `--fs`, TIC-80 keeps
+  its own data in a `.local/` folder in the cart's folder rather than in its
+  usual one: `.local/<build>/config.tic` (its settings, made fresh with the
+  defaults the first time) and `.local/cache/`. So each project gets its own
+  settings: what you change in TIC-80 while running one project stays with
+  that project, and your usual TIC-80 setup, and other projects, are left as
+  they are. [`init`](#starting-a-new-project)'s `.gitignore` keeps `.local/`
+  out of git.
+
+Edit your modules in your own editor and press Ctrl+R in TIC-80 to restart
+the game with them.
+
+`run` also:
+
+- **Backs up the file it runs.** Before starting TIC-80, `run` copies
+  `main.lua` (or the file you named) to `.local/backup/main.lua`, replacing
+  the copy the last `run` made, and says so (`backup: ...`). A save from
+  TIC-80 rewrites the whole file, so if you also edited `main.lua` in another
+  editor while TIC-80 had it open, the save overwrites that edit; the copy
+  holds the file as it was when TIC-80 started. See
+  [restore](#restoring-the-backup).
+- **Checks the modules before starting TIC-80.** Every module `main.lua`
+  requires, and every module those require, must have its file. A missing
+  one stops `run` (status 1) with the module's name, the file it expected
+  and who requires it, instead of TIC-80's `module 'x' not found`. Problems
+  that don't stop the game from running but would stop or break the package
+  are `WARN` lines, and the game still starts: a module that only another
+  module requires (the package won't have it), an asset section in a module,
+  or a module line starting `-- <`.
+- **Points errors at your files.** An error's locations, in the message and
+  every traceback line, become paths from the folder you ran ticpak in,
+  which most terminals and editors let you click: `.\game.lua:19` becomes
+  `mygame/game.lua:19`, and `main.lua`'s chunk (`[string "-- title: ..."]:16`)
+  becomes `mygame/main.lua:16`. The error's source line follows:
+
+  ```
+  mygame/game.lua:19: attempt to perform arithmetic on a nil value (global 'speed')
+  stack traceback:
+  	[C]: in ?
+  	mygame/game.lua:19: in field 'update'
+  	mygame/main.lua:16: in function 'TIC'
+
+  source: mygame/game.lua:19
+      x = x + speed
+  ```
+
+  Everything else TIC-80 prints, `trace` output included, passes through as
+  it is.
+- **Passes TIC-80 options through.** Anything after `--` goes to TIC-80:
+  `ticpak run -- --scale=4`, `ticpak run -- --fullscreen`. `test` takes them
+  too.
+- **Exits 0 when you close TIC-80** (130 for Ctrl+C), so scripts and agents
+  can tell a normal session from a failure to start. TIC-80's own exit status
+  says nothing here: with its output captured, it reports a crash when its
+  window closes normally.
+
+`ticpak test` runs the built package instead, with its errors translated back
+to your sources ([below](#errors-from-the-packaged-cart)). It doesn't set
+`--fs` or make a backup: the package is build output, and changes belong in
+your sources. Like `run`, it passes options after `--` to TIC-80 and exits 0
+when you close it.
+
+#### Restoring the backup
+
+```
+ticpak restore              # main.lua in the current folder (or ./src)
+ticpak restore mygame       # the cart in mygame/
+ticpak restore other.lua    # the file you ran with ticpak run other.lua
+ticpak restore -y           # without asking
+```
+
+`ticpak restore` compares the file with the copy `run` made last. If they
+are the same, it says the file wasn't modified since the backup and changes
+nothing. If they differ, it says when the backup was made and when the file
+was last modified, how far apart, and how many lines differ, then asks
+before putting the copy back:
+
+```
+backup: mygame/.local/backup/main.lua, made 2026-10-10 14:32
+mygame/main.lua was modified 2026-10-10 14:57, 25 minutes after the backup was made; 12 lines differ
+? Restore mygame/main.lua from the backup? (y/N)
+```
+
+Restoring swaps the two: the file gets the copy, and the copy gets the
+version it replaced. So a restore is always reversible: run `ticpak restore`
+again to swap them back, as the hint after a restore says:
+
+```
+restore: mygame/main.lua restored from the backup; the backup now holds the version it replaced
+hint: ticpak restore mygame again to swap them back
+```
+
+There is only one copy, and the next `run` replaces it. This
+is the one command besides bare `ticpak` that asks a question: `-y` restores
+without asking, and without a terminal `restore` needs `-y` (it stops,
+status 1, rather than guess). With no backup yet, it says so (status 1).
 
 ### Asset sections
 
@@ -221,7 +348,7 @@ Pro writes one for each kind of data your game has when it saves a text cart:
 asset data, stored as hex in comment lines.
 
 - **Assets live in `main.lua`.** Edit them in TIC-80 Pro with `main.lua`
-  loaded, save (Ctrl+S), and rebuild. Modules hold code only.
+  loaded (`ticpak run`), save (Ctrl+S), and rebuild. Modules hold code only.
 - **ticpak copies them unchanged.** It splits `main.lua` at the first asset
   tag and appends everything after it to the bundle byte for byte, after the
   inlined code. The minifier never sees the asset sections, so no
@@ -278,8 +405,9 @@ release. `main.lua` and the modules stay your sources.
 ticpak init [FOLDER] [-q]
 ticpak [bundle | check] [SOURCE] [options]
 ticpak check FILE... [-q]
-ticpak run [SOURCE | FILE.lua | FILE.tic]
-ticpak test [SOURCE | PACKAGE] [-o PATH] [-n NAME] [-m...]
+ticpak run [SOURCE | FILE.lua | FILE.tic] [-- TIC-80 OPTIONS]
+ticpak restore [SOURCE | FILE.lua | FILE.tic] [-y]
+ticpak test [SOURCE | PACKAGE] [-o PATH] [-n NAME] [-m...] [-- TIC-80 OPTIONS]
 ticpak decode [SOURCE] [-o PATH] [-n NAME] [-m...] [-e TEXT | -l FILE]
 ticpak minify [options] FILE
 ```
@@ -287,16 +415,17 @@ ticpak minify [options] FILE
 | Command | What it does | Asks questions? |
 |---|---|---|
 | *(none)* | interactive: shows the status, or asks how to build | yes, needs a terminal |
-| `init` | starts a new project: `main.lua` and `game.lua` ([above](#starting-a-new-project)) | never |
+| `init` | starts a new project: `main.lua`, `game.lua` and a `.gitignore` ([above](#starting-a-new-project)) | never |
 | `bundle` | builds and checks, or does nothing when the cart is up to date | never |
 | `check` | checks the project's existing `.tic` without building | never |
 | `check FILE...` | checks exactly the files named ([below](#checking-any-file)) | never |
-| `run` | runs `main.lua`, or the `.lua` or `.tic` you name, in TIC-80's window until you close it, from that file's folder so `require` loads the modules from their files; passes on what TIC-80 prints | never |
+| `run` | runs `main.lua`, or the `.lua` or `.tic` you name, in TIC-80's window until you close it, with that file's folder as the working directory and TIC-80's file system, so `require` loads the modules from their files and a save writes the cart back in place; keeps TIC-80's settings with the project, backs the file up, checks the modules first, and points errors at your files ([above](#running-your-game-while-you-work)) | never |
+| `restore` | swaps the file with the copy `run` made when it last started, if they differ, so running it again swaps back ([above](#restoring-the-backup)) | yes, before restoring (`-y`: no) |
 | `test` | runs the package (or the `.tic`, or the `.lua` bundle, you name) in TIC-80's window until you close it, translating its errors as they happen ([below](#errors-from-the-packaged-cart)) | never |
 | `decode` | translates an error from the packaged cart back to the sources ([below](#errors-from-the-packaged-cart)) | never; at a terminal, asks you to paste the error when the clipboard holds none |
 | `minify FILE` | the minifier on its own ([below](#the-minifier-on-its-own)) | never |
 
-`init`, `bundle`, `check`, `run`, `test` and `decode` never ask questions, so they are the forms for
+`init`, `bundle`, `check`, `run`, `test` and `decode` never ask questions (`restore` does, unless given `-y`), so they are the forms for
 scripts, CI and AI agents (`run` and `test` wait until TIC-80 is closed). Anything
 missing is an error message saying what is needed.
 
@@ -316,6 +445,8 @@ missing is an error message saying what is needed.
 | `--verbose` | also show progress, the check's detail and what minification saved (`check --verbose`: the full check report) |
 | `-e`, `--error TEXT` | `decode` only: the error message and traceback to translate (default: stdin when redirected, else the clipboard, else a paste at the terminal) |
 | `-l`, `--log FILE` | `decode` only: translate the last error in `FILE`, a log of TIC-80's output |
+| `-- OPTION...` | `run` and `test` only: options for TIC-80 itself, such as `--scale=4` or `--fullscreen` |
+| `-y`, `--yes` | `restore` only: restore without asking |
 
 ```
 ticpak init mygame               # a new project in mygame/: main.lua and game.lua

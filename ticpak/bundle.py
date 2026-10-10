@@ -143,6 +143,64 @@ def stub_requires(code):
 UNREFERENCED_SHOWN = 10     # unreferenced .lua files `check` lists before "(+N more)"
 
 
+def source_path(cart_dir, name):
+    """The file of module name (`state.play`: state/play.lua) beside the cart."""
+    return os.path.join(cart_dir, *name.split(".")) + ".lua"
+
+
+def required_modules(cart):
+    """Every module the cart requires, and the ones those require, in the
+    order found: {name: the module requiring it, None for the cart itself}.
+    A module whose file is missing is listed but not read."""
+    cart_dir = os.path.dirname(os.path.abspath(cart))
+    names = stub_requires(cart_code(cart))[0]
+    by = {name: None for name in names}
+    queue = list(names)
+    while queue:
+        name = queue.pop(0)
+        path = source_path(cart_dir, name)
+        if os.path.isfile(path):
+            for sub in stub_requires(open(path, encoding="utf-8").read())[0]:
+                if sub not in by:
+                    by[sub] = name
+                    queue.append(sub)
+    return by
+
+
+def run_problems(cart):
+    """Before `ticpak run`: (the modules whose file is missing, as (name,
+    path, the module requiring it or None), and warnings about what runs
+    from the sources but would not package: a module only another module
+    requires, an asset section in a module, a module line starting `-- <`)."""
+    cart_dir = os.path.dirname(os.path.abspath(cart))
+    missing, warnings = [], []
+    for name, parent in required_modules(cart).items():
+        path = source_path(cart_dir, name)
+        fname = os.path.relpath(path, cart_dir).replace(os.sep, "/")
+        if not os.path.isfile(path):
+            missing.append((name, path, parent))
+            continue
+        if parent is not None:
+            warnings.append(f"{fname} is required by {parent.replace('.', '/')}.lua but"
+                            f" not {os.path.basename(cart)}, so the package won't have"
+                            f' it: add require "{name}" to {os.path.basename(cart)}')
+        src = open(path, encoding="utf-8").read()
+        m = SECTION_LINE_RE.search(src)
+        if m:
+            warnings.append(f"{fname}:{src.count(chr(10), 0, m.start()) + 1} starts an"
+                            f" asset section ({m.group(0).strip()}): only"
+                            f" {os.path.basename(cart)}'s are packaged, so bundle"
+                            " stops on it - move it there")
+            continue
+        for n, line in enumerate(src.split("\n"), 1):
+            if TIC80_TAG_RE.match(line):
+                warnings.append(f"{fname}:{n} starts `-- <`, which TIC-80 reads as"
+                                " the asset sections: a build without -m stops on"
+                                " it - reword the comment")
+                break
+    return missing, warnings
+
+
 def check_sources(cart):
     """`check`'s look at the sources, printed: each module main.lua requires
     and whether its file is there; any module only another module requires
@@ -152,20 +210,10 @@ def check_sources(cart):
     module main.lua requires is missing or the header is incomplete."""
     cart = os.path.abspath(cart)
     cart_dir = os.path.dirname(cart)
-
     def path_of(name):
-        return os.path.join(cart_dir, *name.split(".")) + ".lua"
-
+        return source_path(cart_dir, name)
     names = stub_requires(cart_code(cart))[0]
-    by = {name: None for name in names}     # module -> the module requiring it (None: main.lua)
-    queue = list(names)
-    while queue:
-        name = queue.pop(0)
-        if os.path.isfile(path_of(name)):
-            for sub in stub_requires(open(path_of(name), encoding="utf-8").read())[0]:
-                if sub not in by:
-                    by[sub] = name
-                    queue.append(sub)
+    by = required_modules(cart)
 
     ok = True
     print(f"modules: {len(names)} required by {os.path.basename(cart)}")

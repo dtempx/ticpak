@@ -77,6 +77,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import warnings
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -539,6 +540,74 @@ class TestInit(unittest.TestCase):
         self.assertIn("-- <PALETTE>", chunks)
         for preset in (M.DEFAULT_OPTIONS, M.ALL_OPTIONS):
             M.minify_cart_ex(source, mode=preset, meta_keys=META_KEYS)
+
+    def test_gitignore(self):
+        """init adds *.tic, dist/ and .local/ to the folder's .gitignore,
+        keeping what is there and adding none twice."""
+        folder = os.path.join(self.tmp, "g")
+        os.makedirs(folder)
+        with open(os.path.join(folder, ".gitignore"), "w", encoding="utf-8") as f:
+            f.write("build/\ndist/")
+        self.init(folder)
+        with open(os.path.join(folder, ".gitignore"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "build/\ndist/\n*.tic\n.local/\n")
+
+    def test_run_problems(self):
+        """Before `ticpak run`: a missing module, and what would run but not
+        package (a module only another requires, a `-- <` line)."""
+        folder = os.path.join(self.tmp, "r")
+        self.init(folder)
+        cart = os.path.join(folder, "main.lua")
+        self.assertEqual(bundle.run_problems(cart), ([], []))
+        with open(os.path.join(folder, "game.lua"), "a", encoding="utf-8") as f:
+            f.write('require "helper"\nrequire "gone"\n')
+        with open(os.path.join(folder, "helper.lua"), "w", encoding="utf-8") as f:
+            f.write("-- <MAP> notes\nreturn {}\n")
+        missing, warnings = bundle.run_problems(cart)
+        self.assertEqual([(m[0], m[2]) for m in missing], [("gone", "game")])
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(warnings[0].startswith("helper.lua is required by game.lua"))
+        self.assertTrue(warnings[1].startswith("helper.lua:1 starts `-- <`"))
+
+    def test_backup_restore(self):
+        """`run` copies the file it runs to .local/backup/; `restore` puts
+        it back only when they differ, asking first (or with -y; without a
+        terminal it needs -y)."""
+        folder = os.path.join(self.tmp, "b")
+        self.init(folder)
+        cart = os.path.join(folder, "main.lua")
+        with self.assertRaises(SystemExit) as e:        # no backup yet
+            self.init_free("restore", folder, "-y")
+        self.assertIn("no backup", str(e.exception.code))
+        backup = run.make_backup(cart)
+        self.assertEqual(backup, os.path.join(folder, ".local", "backup", "main.lua"))
+        self.assertIn("not modified", self.init_free("restore", folder, "-y"))
+        original = open(cart, encoding="utf-8").read()
+        with open(cart, "a", encoding="utf-8") as f:
+            f.write("-- changed\n")
+        with self.assertRaises(SystemExit) as e:        # no terminal, no -y
+            with mock.patch.object(cli, "has_terminal", lambda: False):
+                self.init_free("restore", folder)
+        self.assertIn("give -y", str(e.exception.code))
+        changed = open(cart, encoding="utf-8").read()
+        out = self.init_free("restore", folder, "-y")
+        self.assertIn("1 line differs", out)
+        self.assertIn("again to swap them back", out)
+        self.assertEqual(open(cart, encoding="utf-8").read(), original)
+        self.assertEqual(open(backup, encoding="utf-8").read(), changed)    # a swap
+        out = self.init_free("restore", folder, "-y")       # ...so it undoes
+        self.assertIn("1 line differs", out)                # (a `--` line counts)
+        self.assertEqual(open(cart, encoding="utf-8").read(), changed)
+        self.assertEqual(open(backup, encoding="utf-8").read(), original)
+        self.assertEqual(cli.ago(59), "59 seconds")
+        self.assertEqual(cli.ago(-7200), "2 hours")
+
+    def init_free(self, *argv):
+        """cli.main(argv), its output."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(list(argv))
+        return out.getvalue()
 
     def test_stops_on_existing_project(self):
         for existing in ("main.lua", os.path.join("src", "main.lua"), "game.lua"):

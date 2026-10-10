@@ -94,6 +94,29 @@ end
 """
 
 
+# What a project's .gitignore needs: ticpak's outputs, and the cache TIC-80
+# keeps in the folder `ticpak run` gives it (--fs)
+IGNORES = ("*.tic", "dist/", ".local/")
+
+
+def add_ignores(path):
+    """Add each of IGNORES the .gitignore at path lacks (made if missing);
+    returns those added."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = ""
+    have = {line.strip() for line in text.splitlines()}
+    added = [p for p in IGNORES if p not in have]
+    if added:
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            if text and not text.endswith("\n"):
+                f.write("\n")
+            f.write("".join(p + "\n" for p in added))
+    return added
+
+
 def init_project(folder=None):
     """Write main.lua and game.lua into folder (default: the current folder;
     made if missing). Stops, writing nothing, if there is a cart already
@@ -116,6 +139,10 @@ def init_project(folder=None):
             f.write(text)
     print(f"init: wrote {fwd(cart)} (the cart: header, entry stub, palette)"
           f" and {fwd(module)} (the module it requires)")
+    ignore = os.path.join(folder, ".gitignore")
+    added = add_ignores(ignore)
+    if added:
+        print(f"init: {fwd(ignore)} ignores {', '.join(added)}")
     print(f"header: {', '.join(PLACEHOLDERS)} are placeholders - fill them in"
           " before packaging")
     run = "ticpak run" + ("" if folder == "." else " " + folder)

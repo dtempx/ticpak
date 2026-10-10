@@ -520,6 +520,35 @@ class TestInput(unittest.TestCase):
         s.idle()
         self.assertEqual("".join(out), '[string "helper"]:3: boom\npartial')
 
+    def test_run_stream(self):
+        """`ticpak run`: each location in an error, the cart's chunk or a
+        module's file, becomes a path from the current folder, and the
+        error's source line follows; other output and other chunks pass
+        through as they are."""
+        root = tempfile.mkdtemp(prefix="ticpak-run-")
+        self.addCleanup(shutil.rmtree, root, True)
+        main = write_project(root, project("index a field"))
+        here = os.getcwd()
+        os.chdir(root)
+        self.addCleanup(os.chdir, here)
+        chunk = open(main, encoding="utf-8").readline().strip()[:18] + "..."
+        out = []
+        s = errors.RunStream(main, out.append)
+        s.feed("trace enemies.lua:13 is not an error\n"
+               ">.\\enemies.lua:13: attempt to index a nil value (field 'target')\n"
+               "stack traceback:\n\t[C]: in ?\n\t./enemies.lua:13: in upvalue 'chase'\n"
+               f'\t[string "{chunk}"]:12: in function \'TIC\'\n'
+               '[string "other"]:3: boom\n')
+        s.close()
+        line = errors.source_line(root, ("enemies.lua", 13)).strip()
+        self.assertEqual("".join(out),
+                         "trace enemies.lua:13 is not an error\n"
+                         "enemies.lua:13: attempt to index a nil value (field 'target')\n"
+                         "stack traceback:\n\t[C]: in ?\n\tenemies.lua:13: in upvalue 'chase'\n"
+                         "\tmain.lua:12: in function 'TIC'\n\n"
+                         f"source: enemies.lua:13\n    {line}\n"
+                         '[string "other"]:3: boom\n')
+
 
 class TestMap(unittest.TestCase):
     """The decode map (bundle.map_doc), as a folder build writes it."""
@@ -931,6 +960,11 @@ class TestCommand(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 cli.parse_args(argv)
         self.assertEqual(cli.parse_args(["run", self.main])[0], "run")
+        _, args, _ = cli.parse_args(["run", self.main, "--", "--scale=4", "--fullscreen"])
+        self.assertEqual((args.source, args.tic80_args), (self.main, ["--scale=4", "--fullscreen"]))
+        self.assertEqual(cli.parse_args(["test", "--", "--scale=2"])[1].tic80_args, ["--scale=2"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parse_args(["bundle", "--", "--scale=4"])
 
 
 class Terminal(io.StringIO):
