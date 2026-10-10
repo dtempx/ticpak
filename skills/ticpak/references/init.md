@@ -79,17 +79,18 @@ function TIC() game_update() game_draw() end
 
 1. Run `ticpak init` in the project folder (or `ticpak init FOLDER`, which
    makes the folder if missing). It never prompts. It writes `main.lua` (a
-   complete header, the stub `local game = require "game"` with `BOOT` and
-   `TIC` calling `game.init`, `game.update` and `game.draw`, and the default
-   `PALETTE` section) and `game.lua`, a module returning that table, which
-   draws the title. If a `main.lua`, `src/main.lua` or `game.lua` is there
-   already it stops with `ticpak: <path> already exists - ...`, exit status
-   1, and writes nothing: use the other rows of the table above instead.
-2. The header takes defaults: the folder's name as `title`, git
-   `user.name` as `author`, `<title> - a TIC-80 game` as `desc`, the git
-   `origin` URL (else `https://tic80.com`) as `site`, `MIT License` and
-   `0.1`. Ask the user for the title, a one-line description, `site`,
-   `license` and `version`, and edit those lines in `main.lua`.
+   header, the stub `require "game"` with `BOOT` and `TIC` calling
+   `game.init`, `game.update` and `game.draw`, and the default `PALETTE`
+   section) and `game.lua`, a module defining the global table `game`,
+   which draws the title. If a `main.lua`, `src/main.lua` or `game.lua` is
+   there already it stops with `ticpak: <path> already exists - ...`, exit
+   status 1, and writes nothing: use the other rows of the table above
+   instead.
+2. The header has the folder's name as `title`, `0.1` as `version`, and
+   TIC-80's placeholders for `author`, `desc`, `site` and `license`, which
+   `ticpak bundle` rejects (`header: INCOMPLETE`). Ask the user for the
+   author, title, a one-line description, `site`, `license` and `version`,
+   and edit those lines in `main.lua`.
 3. Add `*.tic` and `dist/` to `.gitignore`.
 4. Run `ticpak bundle -f` to prove the bundle boots on its own (see
    [bundle.md](bundle.md)), and tell the user how to run it while developing.

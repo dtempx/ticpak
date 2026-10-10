@@ -423,9 +423,15 @@ def main(argv=None):
         where = f"in {args.source}" if args.source else "at ./main.lua or ./src/main.lua"
         print(f"ticpak: no cart found {where}.\n"
               "Run from the cart's directory, or give its location:"
-              " ticpak [bundle | check] path/to/main.lua\n"
-              "To start a new project here: ticpak init\n"
-              "Specify --help for more info.")
+              " ticpak [bundle | check] path/to/main.lua")
+        if interactive:
+            init = "ticpak init" + (f" {args.source}" if args.source
+                                    and os.path.isdir(args.source) else "")
+            print("hint: " + highlight(init) + " to start a new project"
+                  + (" here" if init == "ticpak init" else " there"))
+        else:
+            print("To start a new project here: ticpak init")
+        print("Specify --help for more info.")
         sys.exit(2)
     if not is_cart(cart):
         build_module(command, args, cart, interactive)

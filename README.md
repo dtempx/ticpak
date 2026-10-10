@@ -192,20 +192,24 @@ ticpak init mygame     # in mygame/, made if missing
 
 `init` writes two files and asks nothing:
 
-- **`main.lua`**, the cart: a complete metadata header, an entry stub
-  (`local game = require "game"` and the `BOOT`/`TIC` callbacks calling
-  it), and TIC-80's default palette as its one asset section. The header
-  takes the defaults [interactive mode](#when-the-header-is-incomplete)
-  offers: the folder's name as the title, your git `user.name` as the
-  author, the git `origin` URL (else `https://tic80.com`) as the site,
-  `MIT License` and version `0.1`. Edit them in `main.lua`.
-- **`game.lua`**, a sample module that returns a table with `init`,
-  `update` and `draw`, drawing the title on screen.
+- **`main.lua`**, the cart: a metadata header, an entry stub
+  (`require "game"` and the `BOOT`/`TIC` callbacks calling `game.init`,
+  `game.update` and `game.draw`), and TIC-80's default palette as its one
+  asset section. The header has the folder's name as the title, version
+  `0.1`, and TIC-80's own placeholders for author, desc, site and license
+  (`game developer, email, etc.`, `short description`, ...), which
+  packaging won't accept until they are filled in.
+- **`game.lua`**, a sample module that defines the global table `game` with
+  `init`, `update` and `draw`, drawing the title on screen.
 
 If the folder already has a `main.lua` (or `src/main.lua`), `init` stops
 with a message and exit status 1, and writes nothing; likewise if `game.lua`
-is there. Run the new cart with `tic80 main.lua` from its folder, and
-package it with `ticpak bundle`.
+is there. Run the new cart with `tic80 main.lua` from its folder. To
+package it, edit the header in `main.lua`, or run `ticpak`, which
+[asks for the placeholder tags](#when-the-header-is-incomplete) (offering
+your git `user.name` as the author, the git `origin` URL, else
+`https://tic80.com`, as the site, and `MIT License`), writes them in and
+builds.
 
 ### Asset sections
 

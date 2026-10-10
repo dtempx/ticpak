@@ -25,14 +25,30 @@ def lua_string(text):
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+# TIC-80's own `new`-cart placeholders, for the tags only the user can fill
+# in: check reports them, and the interactive build asks for them.
+PLACEHOLDERS = {
+    "author": "game developer, email, etc.",
+    "desc": "short description",
+    "site": "website link",
+    "license": "MIT License (change this to your license of choice)",
+}
+
+
 def cart_text(meta):
     tags = "".join(f"-- {tag + ':':<8} {meta[tag]}\n" for tag in
                    ("title", "author", "desc", "site", "license", "version", "script"))
     return (f"{tags}\n"
-            f'local {MODULE} = require "{MODULE}"\n'
+            f'require "{MODULE}"\n'
             "\n"
-            f"function BOOT() {MODULE}.init() end\n"
-            f"function TIC() {MODULE}.update() {MODULE}.draw() end\n"
+            "function BOOT()\n"
+            f"  {MODULE}.init()\n"
+            "end\n"
+            "\n"
+            "function TIC()\n"
+            f"  {MODULE}.update()\n"
+            f"  {MODULE}.draw()\n"
+            "end\n"
             "\n" + PALETTE)
 
 
@@ -41,32 +57,30 @@ def module_text(title):
 -- {MODULE}: a sample module. main.lua requires it, so ticpak inlines it into
 -- the package. Add more modules beside it, and require each one in main.lua.
 
-local M = {{}}
+{MODULE} = {{}}
 
 local TITLE = {lua_string(title)}
 local t
 
-local function centre(text, y, colour, small)
+local function print_center(text, y, color, small)
   local w = print(text, 0, -8, 0, false, 1, small)   -- off screen: just the width
-  print(text, (240 - w) // 2, y, colour, false, 1, small)
+  print(text, (240 - w) // 2, y, color, false, 1, small)
 end
 
-function M.init()
+function {MODULE}.init()
   t = 0
 end
 
-function M.update()
+function {MODULE}.update()
   t = t + 1
 end
 
-function M.draw()
+function {MODULE}.draw()
   cls(0)
-  centre(TITLE, 50, 12)
-  centre("edit {MODULE}.lua, then Ctrl+R", 62, 13, true)
+  print_center(TITLE, 50, 12)
+  print_center("edit {MODULE}.lua, then Ctrl+R", 62, 13, true)
   circ(120 + math.sin(t / 30) * 40, 86, 4, 6)
 end
-
-return M
 """
 
 
@@ -86,15 +100,15 @@ def init_project(folder=None):
     if os.path.exists(module):
         sys.exit(f"ticpak: {fwd(module)} already exists - init would overwrite it")
     os.makedirs(folder, exist_ok=True)
-    meta = header_defaults({}, os.path.abspath(cart))
+    meta = {**header_defaults({}, os.path.abspath(cart)), **PLACEHOLDERS}
     for path, text in ((cart, cart_text(meta)), (module, module_text(meta["title"]))):
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
     print(f"init: wrote {fwd(cart)} (the cart: header, entry stub, palette)"
           f" and {fwd(module)} (the module it requires)")
-    print(f"header: title {meta['title']!r}, author {meta['author']!r},"
-          f" site {meta['site']} - edit main.lua's header to change them")
+    print(f"header: title {meta['title']!r}; {', '.join(PLACEHOLDERS)} are"
+          " placeholders - fill them in before packaging")
     run = "tic80 main.lua" if folder == "." else f"cd {folder} && tic80 main.lua"
     print("hint: " + highlight(run) + " to run it in TIC-80 Pro (from the cart's folder)")
-    print("hint: " + highlight("ticpak bundle" + ("" if folder == "." else " " + folder))
-          + " to package it")
+    print("hint: " + highlight("ticpak" + ("" if folder == "." else " " + folder))
+          + " to fill in the header and package it")

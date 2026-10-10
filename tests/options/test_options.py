@@ -84,7 +84,7 @@ REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, REPO)                    # the ticpak package, installed or not
 sys.path.insert(0, HERE)                    # make_samples, for its asset layouts
 from ticpak import minify as M  # noqa: E402
-from ticpak import __version__, bundle, check, cli, report, run  # noqa: E402
+from ticpak import __version__, bundle, check, cli, header, report, run  # noqa: E402
 import make_samples  # noqa: E402
 
 try:
@@ -502,8 +502,9 @@ class TestMinifyCommand(unittest.TestCase):
 
 
 class TestInit(unittest.TestCase):
-    """`ticpak init [FOLDER]`: main.lua (complete header, a stub requiring
-    game, an asset section) and game.lua, which bundle and minify; stops,
+    """`ticpak init [FOLDER]`: main.lua (a header with TIC-80's placeholders
+    for author, desc, site and license, a stub requiring game, an asset
+    section) and game.lua, which bundle and minify; stops,
     writing nothing, when there is a cart already or game.lua is taken."""
 
     def setUp(self):
@@ -523,8 +524,13 @@ class TestInit(unittest.TestCase):
         cart = os.path.join(folder, "main.lua")
         self.assertTrue(bundle.is_cart(cart))
         code = bundle.cart_code(cart)
+        meta = check.parse_header(code)
+        self.assertEqual(meta["title"], "my game")
+        self.assertEqual(header.incomplete_fields(meta),
+                         ["author", "desc", "site", "license"])
+        header.write_header(cart, header.header_defaults(meta, cart))  # as asked
+        code = bundle.cart_code(cart)
         self.assertTrue(check.check_header(code, quiet=True))
-        self.assertEqual(check.parse_header(code)["title"], "my game")
         self.assertEqual(bundle.stub_requires(code)[0], ["game"])
         t = bundle.Target(cart, "my-game", None)
         source, chunks, names, _ = bundle.assemble(t)
