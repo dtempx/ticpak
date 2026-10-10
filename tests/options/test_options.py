@@ -581,7 +581,8 @@ class TestInit(unittest.TestCase):
         self.assertIn("no backup", str(e.exception.code))
         backup = run.make_backup(cart)
         self.assertEqual(backup, os.path.join(folder, ".local", "backup", "main.lua"))
-        self.assertIn("not modified", self.init_free("restore", folder, "-y"))
+        self.assertIn("matches the backup (the copy ticpak run saved today",
+                      self.init_free("restore", folder, "-y"))
         original = open(cart, encoding="utf-8").read()
         with open(cart, "a", encoding="utf-8") as f:
             f.write("-- changed\n")
@@ -591,12 +592,17 @@ class TestInit(unittest.TestCase):
         self.assertIn("give -y", str(e.exception.code))
         changed = open(cart, encoding="utf-8").read()
         out = self.init_free("restore", folder, "-y")
-        self.assertIn("1 line differs", out)
+        self.assertIn("differ: 1 line\n", out)
+        self.assertIn("backup: the copy ticpak run saved today", out)
+        self.assertIn("main.lua: your version, last changed today", out)
         self.assertIn("again to swap them back", out)
         self.assertEqual(open(cart, encoding="utf-8").read(), original)
         self.assertEqual(open(backup, encoding="utf-8").read(), changed)    # a swap
         out = self.init_free("restore", folder, "-y")       # ...so it undoes
-        self.assertIn("1 line differs", out)                # (a `--` line counts)
+        self.assertIn("differ: 1 line\n", out)             # (a `--` line counts)
+        self.assertIn("backup: your version, last changed today", out)
+        self.assertIn("main.lua: the copy ticpak run saved today", out)
+        self.assertIn("put back by ticpak restore today", out)
         self.assertEqual(open(cart, encoding="utf-8").read(), changed)
         self.assertEqual(open(backup, encoding="utf-8").read(), original)
         self.assertEqual(cli.ago(59), "59 seconds")

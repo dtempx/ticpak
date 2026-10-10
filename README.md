@@ -312,26 +312,42 @@ ticpak restore other.lua    # the file you ran with ticpak run other.lua
 ticpak restore -y           # without asking
 ```
 
-`ticpak restore` compares the file with the copy `run` made last. If they
-are the same, it says the file wasn't modified since the backup and changes
-nothing. If they differ, it says when the backup was made and when the file
-was last modified, how far apart, and how many lines differ, then asks
-before putting the copy back:
+`ticpak restore` compares the file with the copy `run` saved last. If they
+are the same, it says so and changes nothing. If they differ, it names each
+side by what it is, with its time, says how many lines differ, and asks
+before swapping them:
 
 ```
-backup: mygame/.local/backup/main.lua, made 2026-10-10 14:32
-mygame/main.lua was modified 2026-10-10 14:57, 25 minutes after the backup was made; 12 lines differ
-? Restore mygame/main.lua from the backup? (y/N)
+backup: the copy ticpak run saved today at 14:32:05 (mygame/.local/backup/main.lua)
+mygame/main.lua: your version, last changed today at 14:57:40, 25 minutes after the copy was saved
+differ: 12 lines
+? Restore mygame/main.lua to the copy ticpak run saved today at 14:32:05? (y/N)
 ```
 
-Restoring swaps the two: the file gets the copy, and the copy gets the
+Restoring swaps the two: the file gets the copy, and the backup gets the
 version it replaced. So a restore is always reversible: run `ticpak restore`
 again to swap them back, as the hint after a restore says:
 
 ```
-restore: mygame/main.lua restored from the backup; the backup now holds the version it replaced
+restore: mygame/main.lua is now the copy ticpak run saved today at 14:32:05; the backup holds your version, last changed today at 14:57:40
 hint: ticpak restore mygame again to swap them back
 ```
+
+ticpak keeps a note beside the backup (`.local/backup/main.lua.json`) of
+what each side is, so after a swap the names still fit, and each version
+keeps its own time:
+
+```
+backup: your version, last changed today at 14:57:40 (mygame/.local/backup/main.lua)
+mygame/main.lua: the copy ticpak run saved today at 14:32:05, put back by ticpak restore today at 15:01:12
+differ: 12 lines
+? Restore mygame/main.lua to your version, last changed today at 14:57:40? (y/N)
+```
+
+If you edit the file after a restore, it is "your version" again, with the
+time of that edit. A restore gives the file the current time as its
+modified time, whichever version it puts back, so the next `bundle` sees
+the file as changed and rebuilds.
 
 There is only one copy, and the next `run` replaces it. This
 is the one command besides bare `ticpak` that asks a question: `-y` restores

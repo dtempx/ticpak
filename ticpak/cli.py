@@ -21,6 +21,7 @@ work:
 import argparse
 import contextlib
 import difflib
+import hashlib
 import io
 import os
 import shutil
@@ -39,7 +40,8 @@ from .console import FlatStdout, Progress, Prompts, fwd, has_terminal, highlight
 from .header import META_KEYS, cart_code, ensure_header, package_name, slug
 from .report import (check_summary, kb, made_of_lines, savings_table, size_summary,
                      write_report)
-from .run import BOOT_SECONDS, backup_path, make_backup, play, verify
+from .run import (BOOT_SECONDS, backup_path, make_backup, play, read_backup_note, verify,
+                  write_backup_note)
 
 EXAMPLES = """examples (run from the port's directory, the one holding main.lua):
   ticpak init                     a new project here: main.lua and game.lua
@@ -724,51 +726,80 @@ def ago(seconds):
     return f"{s} second{'s' if s != 1 else ''}"
 
 
+def stamp(t):
+    """A time for restore's messages: today at 14:32:05, or on 2026-10-09
+    at 14:32:05."""
+    day = time.strftime("%Y-%m-%d", time.localtime(t))
+    when = "today" if day == time.strftime("%Y-%m-%d") else f"on {day}"
+    return f"{when} at {time.strftime('%H:%M:%S', time.localtime(t))}"
+
+
+def version_label(v):
+    """What a version restore swaps is, in words (see write_backup_note)."""
+    if v["from"] == "run":
+        return f"the copy ticpak run saved {stamp(v['time'])}"
+    return f"your version, last changed {stamp(v['time'])}"
+
+
 def restore_command(args):
-    """`ticpak restore [FILE]`: put back the copy `run` made of the file it
-    ran (main.lua, or the file named) when it last started. Says when the
-    copy was made, relative to when the file was last modified, and how
-    many lines differ; restores only when they differ, after asking (or with
-    -y; without a terminal, -y is needed). Restoring swaps the two, so the
-    backup then holds the version replaced, and restoring again undoes it."""
+    """`ticpak restore [FILE]`: swap the file `run` ran (main.lua, or the
+    file named) with the copy of it `run` saved when it last started. Each
+    side is named by what it is (the backup's note, run.write_backup_note):
+    the copy run saved, or your version as last changed, with its time, and
+    how many lines differ. Swaps only when they differ, after asking (or
+    with -y; without a terminal, -y is needed). After a swap the backup holds
+    the version replaced, so restoring again undoes it. The file's modified
+    time is the swap's, so a build sees it as changed."""
     path = run_file(args, "restore")
     backup = backup_path(path)
     if not os.path.isfile(backup):
         sys.exit(f"ticpak: no backup of {fwd(path)} - ticpak run makes one each"
                  f" time it starts ({fwd(backup)})")
-    made, changed = os.path.getmtime(backup), os.path.getmtime(path)
-    print(f"backup: {fwd(backup)}, made {time.strftime('%Y-%m-%d %H:%M', time.localtime(made))}")
     with open(path, "rb") as f:
         current = f.read()
     with open(backup, "rb") as f:
         saved = f.read()
+    note = read_backup_note(backup)
+    kept = note.get("backup") or {"from": "run", "time": os.path.getmtime(backup)}
+    put = note.get("file")              # what the last restore put in the file...
+    restored = (put and put.get("hash") == hashlib.sha256(current).hexdigest())
+    mine = ({"from": put["from"], "time": put["time"]} if restored   # ...unedited since
+            else {"from": "edit", "time": os.path.getmtime(path)})
+    name = fwd(path)
     if current == saved:
-        print(f"{fwd(path)} was not modified since the backup: nothing to restore")
+        print(f"{name} matches the backup ({version_label(kept)}): nothing to restore")
         return
-    when = (f"{ago(changed - made)} before" if made > changed
-            else f"{ago(changed - made)} after")
     match = difflib.SequenceMatcher(None, saved.decode("utf-8", "replace").splitlines(),
                                     current.decode("utf-8", "replace").splitlines(),
                                     autojunk=False)
     differ = sum(max(i2 - i1, j2 - j1)          # a changed line counts once
                  for tag, i1, i2, j1, j2 in match.get_opcodes() if tag != "equal")
-    print(f"{fwd(path)} was modified"
-          f" {time.strftime('%Y-%m-%d %H:%M', time.localtime(changed))},"
-          f" {when} the backup was made;"
-          f" {differ} line{'s differ' if differ != 1 else ' differs'}")
+    print(f"backup: {version_label(kept)} ({fwd(backup)})")
+    if restored:
+        now = f"{version_label(mine)}, put back by ticpak restore {stamp(put['restored'])}"
+    else:
+        now = version_label(mine)
+        if kept["from"] == "run" and mine["time"] >= kept["time"]:
+            now += f", {ago(mine['time'] - kept['time'])} after the copy was saved"
+    print(f"{name}: {now}")
+    print(f"differ: {differ} line{'s' if differ != 1 else ''}")
     if not args.yes:
         if not has_terminal():
             sys.exit("ticpak: restore: no terminal to ask on - give -y to restore"
                      " without asking")
-        if not Prompts().confirm(f"Restore {fwd(path)} from the backup?", default=False):
+        if not Prompts().confirm(f"Restore {name} to {version_label(kept)}?",
+                                 default=False):
             print("restore: kept as it is")
             return
     with open(path, "wb") as f:         # a swap: the backup keeps what was replaced
         f.write(saved)
     with open(backup, "wb") as f:
         f.write(current)
-    print(f"restore: {fwd(path)} restored from the backup; the backup now holds"
-          " the version it replaced")
+    write_backup_note(backup, {"backup": mine,
+                               "file": {**kept, "hash": hashlib.sha256(saved).hexdigest(),
+                                        "restored": time.time()}})
+    print(f"restore: {name} is now {version_label(kept)};"
+          f" the backup holds {version_label(mine)}")
     again = join_command(["ticpak", "restore"] + ([args.source] if args.source else []))
     print("hint: " + highlight(again) + " again to swap them back")
 

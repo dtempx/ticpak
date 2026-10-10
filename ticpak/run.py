@@ -4,6 +4,7 @@ run's output, boot the bundle alone then save the .tic, and run a cart in
 its window passing its output on (`ticpak run`, `ticpak test`).
 """
 import codecs
+import json
 import os
 import queue
 import re
@@ -120,12 +121,34 @@ def backup_path(path):
 
 
 def make_backup(path):
-    """Copy path to backup_path(path), replacing the last copy; the copy's
-    modified time is when it was made. Returns the copy's path."""
+    """Copy path to backup_path(path), replacing the last copy, and note it
+    as the copy `run` saved now (write_backup_note). Returns the copy's
+    path."""
     dest = backup_path(path)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copyfile(path, dest)
+    write_backup_note(dest, {"backup": {"from": "run", "time": time.time()}})
     return dest
+
+
+def write_backup_note(backup, note):
+    """Beside the backup (<name>.json), what each copy is, as `restore`
+    names it: {"backup": the backup's version, "file": the version a
+    restore put in the file (with its content's hash, so a later edit shows),
+    or absent}. A version is {"from": "run" (the copy run saved) or "edit"
+    (the file as it was edited), "time": when saved or last changed}."""
+    with open(backup + ".json", "w", encoding="utf-8") as f:
+        json.dump(note, f)
+
+
+def read_backup_note(backup):
+    """write_backup_note's note, or {} if there is none (or it is unreadable)."""
+    try:
+        with open(backup + ".json", encoding="utf-8") as f:
+            note = json.load(f)
+        return note if isinstance(note, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def play(cart, stream, cwd=None, fs=False, extra=()):
