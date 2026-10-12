@@ -855,13 +855,17 @@ hint: ticpak bundle -m=comments,whitespace -n mygame-lite -o dist/ to build with
 ```
 
 If the default output (`<name>.tic` beside `main.lua`, or `-o`'s) already
-exists, it asks nothing. It prints the status lines and a hint with the
-command that rebuilds it as it was built, `-m` included (from its
-`-- ticpak:` line), and the one that checks it, and exits:
+exists, it asks nothing. It prints the status lines and a hint, and exits.
+The hint gives two ways to rebuild: `ticpak -f`, which asks the questions
+anyway (starting from the minification the last build used), and the
+`bundle` command that rebuilds it as it was built, `-m` included (from its
+`-- ticpak:` line):
 
 ```
-hint: ticpak bundle -f -m -o dist/ to force rebuild
-hint: ticpak check to check bundle info
+ticpak
+source: main.lua (24 modules)
+cart: dist/serpentine.tic (up-to-date)
+hint: ticpak -f or ticpak bundle -f -m=comments -o dist/ to force a rebuild
 ```
 
 With no terminal (piped input, CI) it doesn't guess. It tells you to use

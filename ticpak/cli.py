@@ -47,6 +47,7 @@ EXAMPLES = """examples (run from the port's directory, the one holding main.lua)
   ticpak init                     a new project here: main.lua and game.lua
   ticpak init mygame              ...in mygame/ (made if missing)
   ticpak                          interactive: status, or asks to build
+  ticpak -f                       ...asks to build even if it is built already
   ticpak bundle                    build + check if out of date: <name>.tic beside main.lua
   ticpak bundle -f                 build + check regardless (--force)
   ticpak bundle --verbose          ...showing progress, the check's detail, minify savings
@@ -198,17 +199,10 @@ def build_command(source, minify, name, default_name, out, report=None, force=Fa
     return join_command(parts)
 
 
-def check_command(source, name, default_name, out):
-    """The `ticpak check` command line for what build_command builds. A
-    check finds DEFAULT_DIR's build by itself, so -o only for another."""
-    parts = ["ticpak", "check"]
-    if source:
-        parts.append(source)
-    if name != default_name and (out is None or out_kind(out) == "dir"):
-        parts += ["-n", name]
-    if out is not None and out != DEFAULT_DIR:
-        parts += ["-o", out]
-    return join_command(parts)
+def ask_again_command(source):
+    """`ticpak -f`: interactive mode, asking the build questions even though
+    the output exists."""
+    return join_command(["ticpak", "-f"] + ([source] if source else []))
 
 
 def join_command(parts):
@@ -244,7 +238,8 @@ def parse_args(argv):
                          " a .lua or .tic to run; with `test`, the package"
                          " (.tic, or a .lua ticpak built) to run")
     ap.add_argument("-f", "--force", action="store_true",
-                    help="bundle: rebuild even if the package is up to date")
+                    help="bundle: rebuild even if the package is up to date; with"
+                         " no command, ask to build even if it exists")
     ap.add_argument("-q", "--quiet", action="store_true",
                     help="bundle, check: print nothing; the exit status says how it"
                          " went (0 OK, 1 failed or a violation, 2 a usage error)."
@@ -507,12 +502,15 @@ def main(argv=None):
         print(f"cart: {fwd(t.output)} (not built yet)")
 
     if interactive:
-        if os.path.isfile(t.output):    # rebuild it as it was built
+        built = os.path.isfile(t.output)
+        if built and not args.force:    # rebuild it as it was built
             force_hint(build_command(args.source, last, t.name, package_name(meta), out,
-                                     force=True),
-                       check_command(args.source, t.name, package_name(meta), out))
+                                     force=True), ask_again_command(args.source))
             return
-        print("hint: answer the questions below to build it (Ctrl+C to cancel)")
+        print(f"hint: answer the questions below to {'rebuild' if built else 'build'}"
+              " it (Ctrl+C to cancel)")
+        if built and last is not None and not args.minify_given:
+            args.minify = last          # -f: the questions start from the last build
         args.minify, name, out = ask_build_settings(Prompts(), args.minify, t.name, out)
         t = Target(cart, name, out, build_report(args.report, out))
         guard_sources(t)
@@ -549,8 +547,7 @@ def main(argv=None):
         elif t.tic:
             print("\n".join(size_summary(t.tic, unminified_size(t), colour=True)))
         force_hint(build_command(args.source, args.minify, t.name, package_name(meta),
-                                 args.out, args.report, force=True),
-                   check_command(args.source, t.name, package_name(meta), args.out))
+                                 args.out, args.report, force=True))
         return
     # Just the .lua: boot it and check a .tic made from it all the same in
     # tmp, then drop the .tic.
@@ -869,12 +866,12 @@ def build_plan(minify):
             + [("boot", BOOT_SECONDS), ("save", 1.0)])
 
 
-def force_hint(command, check=None):
-    """The command that rebuilds an up-to-date output, and for a cart the
-    one that checks it (check), highlighted."""
-    print("hint: " + highlight(command) + " to force rebuild")
-    if check:
-        print("hint: " + highlight(check) + " to check bundle info")
+def force_hint(command, again=None):
+    """The command that rebuilds an up-to-date output, highlighted; again:
+    in interactive mode, `ticpak -f` (which asks the questions again) first,
+    highlighted on its own."""
+    print("hint: " + (highlight(again) + " or " if again else "") + highlight(command)
+          + " to force a rebuild")
 
 
 def build_hint(args, t, default_name):
@@ -947,11 +944,15 @@ def build_module(command, args, path, interactive):
     else:
         print(f"output: {fwd(t.lua)} (not built yet)")
     if interactive:
-        if os.path.isfile(t.lua):       # rebuild it as it was built
+        built = os.path.isfile(t.lua)
+        if built and not args.force:    # rebuild it as it was built
             force_hint(build_command(args.source, last, name, default_name, args.out,
-                                     force=True))
+                                     force=True), ask_again_command(args.source))
             return
-        print("hint: answer the question below to build it (Ctrl+C to cancel)")
+        print(f"hint: answer the question below to {'rebuild' if built else 'build'}"
+              " it (Ctrl+C to cancel)")
+        if built and last is not None and not args.minify_given:
+            args.minify = last          # -f: the question starts from the last build
         args.minify = ask_minify(Prompts(), args.minify)
         args.force = True
         rerun = build_command(args.source, args.minify, name, default_name, args.out,
