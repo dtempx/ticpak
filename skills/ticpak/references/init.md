@@ -143,7 +143,9 @@ Report what you find, fix it if the user agrees, then run `ticpak bundle -f`.
   TIC-80 settings. Each `run` first copies the file it runs to
   `.local/backup/` (one copy, replaced each time); `ticpak restore` swaps it
   back in if it differs (running it again swaps back), after asking - pass `-y`, since you have no terminal
-  to answer on, and only when the user asks for the restore. Before starting
+  to answer on, and only when the user asks for the restore. When TIC-80 is
+  closed, `run` prints `main.lua: unchanged` or `main.lua: changed while
+  TIC-80 ran (N lines)` and the restore command. Before starting
   TIC-80, `run` checks that every required module's file exists (a missing
   one stops it, status 1) and prints `WARN` for what would run but not
   package. It prints errors with paths from the current folder

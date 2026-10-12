@@ -262,6 +262,18 @@ the game with them.
   editor while TIC-80 had it open, the save overwrites that edit; the copy
   holds the file as it was when TIC-80 started. See
   [restore](#restoring-the-backup).
+- **Says whether the file changed.** When you close TIC-80, `run` compares
+  the file with how it was when TIC-80 started. Either it is the same
+  (`mygame/main.lua: unchanged`, which includes a save that wrote it back
+  exactly as it was), or `run` says how many lines changed and gives the
+  restore that puts the copy back:
+
+  ```
+  mygame/main.lua: changed while TIC-80 ran (12 lines)
+  hint: ticpak restore mygame to put back the copy from before the run
+  ```
+
+  A `.tic` is compared the same way, without a line count.
 - **Checks the modules before starting TIC-80.** Every module `main.lua`
   requires, and every module those require, must have its file. A missing
   one stops `run` (status 1) with the module's name, the file it expected

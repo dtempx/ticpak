@@ -681,8 +681,9 @@ def run_command(args):
     is a warning. Its output passes through, but for errors, which already
     name the sources: errors.RunStream makes their locations paths from the
     current folder and adds the source line. Before TIC-80 starts, the file
-    is copied to .local/backup/ (`ticpak restore` puts it back). Exits 0
-    once TIC-80 is closed."""
+    is copied to .local/backup/ (`ticpak restore` puts it back); once it is
+    closed, run_changes says whether the file changed. Exits 0 once TIC-80
+    is closed."""
     path = run_file(args, "run")
     if path.lower().endswith(".lua") and is_cart(path):
         missing, warnings = run_problems(path)
@@ -696,9 +697,39 @@ def run_command(args):
             sys.exit(f"ticpak: run: {len(missing)} required module"
                      f"{'s' if len(missing) > 1 else ''} missing - create"
                      f" {'them' if len(missing) > 1 else 'it'}, or fix the require")
-    print(f"backup: {fwd(make_backup(path))} (ticpak restore puts it back)")
+    with open(path, "rb") as f:
+        before = f.read()
+    backup = make_backup(path)
+    print(f"backup: {fwd(backup)} (ticpak restore puts it back)")
     print(f"running {fwd(path)} in TIC-80 (close it, or Ctrl+C here, to stop)")
-    sys.exit(play(path, errors.RunStream(path, raw_write), fs=True, extra=args.tic80_args))
+    status = play(path, errors.RunStream(path, raw_write), fs=True, extra=args.tic80_args)
+    run_changes(args, path, before, backup)
+    sys.exit(status)
+
+
+def run_changes(args, path, before, backup):
+    """After `run`: whether the file it ran changed while TIC-80 had it (a
+    save from TIC-80's editors, or an edit elsewhere), by its content: how
+    many lines (a .lua), and the restore that puts back the copy from
+    before the run."""
+    name = fwd(path)
+    try:
+        with open(path, "rb") as f:
+            after = f.read()
+    except OSError:
+        print(f"{name}: gone after the run - the copy from before it is {fwd(backup)}")
+        return
+    if after == before:
+        print(f"{name}: unchanged")
+        return
+    if path.lower().endswith(".lua"):
+        n = differ_lines(before, after)
+        what = f"{n} line{'s' if n != 1 else ''}" if n else "line endings only"
+        print(f"{name}: changed while TIC-80 ran ({what})")
+    else:
+        print(f"{name}: changed while TIC-80 ran")
+    again = join_command(["ticpak", "restore"] + ([args.source] if args.source else []))
+    print("hint: " + highlight(again) + " to put back the copy from before the run")
 
 
 def run_file(args, command):
@@ -729,6 +760,16 @@ def stamp(t):
     day = time.strftime("%Y-%m-%d", time.localtime(t))
     when = "today" if day == time.strftime("%Y-%m-%d") else f"on {day}"
     return f"{when} at {time.strftime('%H:%M:%S', time.localtime(t))}"
+
+
+def differ_lines(old, new):
+    """How many lines differ between two versions of a file (bytes), a
+    changed line counted once; 0 when only line endings differ."""
+    match = difflib.SequenceMatcher(None, old.decode("utf-8", "replace").splitlines(),
+                                    new.decode("utf-8", "replace").splitlines(),
+                                    autojunk=False)
+    return sum(max(i2 - i1, j2 - j1)
+               for tag, i1, i2, j1, j2 in match.get_opcodes() if tag != "equal")
 
 
 def version_label(v):
@@ -766,11 +807,7 @@ def restore_command(args):
     if current == saved:
         print(f"{name} matches the backup ({version_label(kept)}): nothing to restore")
         return
-    match = difflib.SequenceMatcher(None, saved.decode("utf-8", "replace").splitlines(),
-                                    current.decode("utf-8", "replace").splitlines(),
-                                    autojunk=False)
-    differ = sum(max(i2 - i1, j2 - j1)          # a changed line counts once
-                 for tag, i1, i2, j1, j2 in match.get_opcodes() if tag != "equal")
+    differ = differ_lines(saved, current)
     print(f"backup: {version_label(kept)} ({fwd(backup)})")
     if restored:
         now = f"{version_label(mine)}, put back by ticpak restore {stamp(put['restored'])}"
